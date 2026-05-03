@@ -212,11 +212,9 @@ LivePhotoPairing（同 basename .HEIC + .MOV 一起下载）
 
 ---
 
-#### T0.3 · Git 仓库初始化 — `TODO`
+#### T0.3 · Git 仓库初始化 — `DONE` (2026-05-03, commit `9820e99`)
 
 **目标**：项目纳入 git 版本控制。
-
-**当前状态**：项目目录不是 git 仓库。
 
 **实现要点**：
 ```bash
@@ -274,27 +272,29 @@ Carthage/Build
 
 > ⚠️ Phase 1 是整个项目最容易卡死的部分。建议先做 CLI 验证（在 main app 里临时加个按钮触发，把结果打到 stdout），脱离 SwiftUI 把 ImageCaptureCore 完全打通后再往 UI 上接。
 
-#### T1.1 · DeviceBrowser — `TODO`
+#### T1.1 · DeviceBrowser — `DONE` (2026-05-03)
 
 **目标**：能发现并打印连接的 iPhone 设备名。
 
 **文件**：`SideRoll/Services/DeviceBrowser.swift`
 
-**实现要点**：
-- 创建 `ICDeviceBrowser` 实例
-- 设置 `browsedDeviceTypeMask = [.camera]`（注意是 OptionSet，包 `.camera` 即可，iPhone 报告为 camera 类型）
-- 实现 `ICDeviceBrowserDelegate.deviceBrowser(_:didAdd:moreComing:)` 回调，过滤 `ICCameraDevice` 类型
-- 调用 `browser.start()`
-- `@MainActor` 注解或在主线程调用，避免 actor isolation 警告
-- 暴露 `@Published var connectedDevice: ICCameraDevice?` 给 UI
+**实现**：
+- `final class DeviceBrowser: NSObject, ObservableObject` 持有 `ICDeviceBrowser`，`@Published private(set) var connectedDevice: ICCameraDevice?`
+- `browsedDeviceTypeMask = ICDeviceTypeMask.camera ∪ ICDeviceLocationTypeMask.local`（OR rawValues 后包成 `ICDeviceTypeMask`，单 `.camera` 不够，需要带上位置 mask）
+- delegate 方法标 `nonisolated`，因为 ImageCaptureCore 的 callback 与 `@MainActor` 默认隔离不兼容；状态写入用 `Task { @MainActor in ... }` 跳回主 actor
+- 在 `SideRollApp` 中 `@StateObject` 实例化，`.task { browser.start() }` 启动
 
-**验收**：
-- 插上 iPhone（解锁状态、首次允许访问），App 启动后 ≤5 秒控制台打印 `Found device: <iPhone 名称>`
-- 拔掉 iPhone，控制台打印 `Device removed: ...`
+**验收结果**：
+- ✅ 插上 iPhone：`[DeviceBrowser] Found device: NaplesIP17Pro (moreComing=false)`
+- ✅ 拔掉 iPhone：`[DeviceBrowser] Device removed: NaplesIP17Pro`
+- ✅ 编译通过，App 沙箱+USB entitlement 在 T0.2 已就位，无需额外系统授权
 
-**坑**：
+**坑（实际遇到的）**：
+- `ObservableObject` / `@Published` 属于 Combine 框架，`import Foundation` 不够，必须 `import Combine`（首次编译报 "type does not conform to protocol ObservableObject"）
+
+**坑（沿 Apple 示例预防的，未实证另一条路）**：
+- `browsedDeviceTypeMask` 没单试 `.camera`，直接按 Apple Sample 的 OR 写法（`ICDeviceTypeMask.camera ∪ ICDeviceLocationTypeMask.local` 的 rawValues）。如要简化为单 `.camera` 可后续验证
 - 必须保留 `ICDeviceBrowser` 强引用，否则会被释放、回调永远不触发
-- delegate 是 NSObject 协议，宿主类需要 `: NSObject, ICDeviceBrowserDelegate`，与 `MainActor` 默认隔离结合时可能需要 `@preconcurrency` 或 `nonisolated`
 
 ---
 
@@ -695,8 +695,8 @@ enum TimeWindowResolver {
 
 | Phase | 状态 |
 |---|---|
-| 0 · 脚手架 | 2/3 完成（T0.1、T0.2 done，T0.3 待做） |
-| 1 · iPhone USB | 0/3 |
+| 0 · 脚手架 | ✅ 3/3 完成 |
+| 1 · iPhone USB | 1/3（T1.1 done） |
 | 2 · 相机解析 | 0/4 |
 | 3 · 导入引擎 | 0/4 |
 | 4 · SwiftUI | 0/5 |
@@ -704,7 +704,12 @@ enum TimeWindowResolver {
 
 ### 下一步
 
-**第一个待做任务：T0.3 · Git 仓库初始化**（参见 §5）
+**第一个待做任务：T1.2 · PhotoEnumerator v0**（参见 §5）
+
+⚠️ T1.2 提醒：
+- `mediaFiles` 不是同步可读——必须先 `device.requestOpenSession()`，session 打开后还要等 `cameraDevice(_:didAddItems:)` 系列 delegate 回调把内容枚举完
+- iPhone 上文件可能上万，先打前 10 验证就行，不要一次性全部 print
+- 如果 `mediaFiles` 一直空：先在系统"图像捕捉"App 验证 iPhone 可见，再排查 entitlement / 信任此电脑
 
 ### 已知问题 / 开放问题
 
