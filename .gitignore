@@ -1,0 +1,53 @@
+# macOS
+.DS_Store
+._*
+
+# Xcode build artifacts
+build/
+DerivedData/
+*.pbxuser
+!default.pbxuser
+*.mode1v3
+!default.mode1v3
+*.mode2v3
+!default.mode2v3
+*.perspectivev3
+!default.perspectivev3
+xcuserdata/
+*.moved-aside
+*.xccheckout
+*.xcscmblueprint
+*.hmap
+*.ipa
+*.dSYM.zip
+*.dSYM
+
+# Swift Package Manager
+.build/
+Packages/
+Package.pins
+Package.resolved
+.swiftpm/
+
+# CocoaPods (未使用但预留)
+Pods/
+
+# Carthage (未使用但预留)
+Carthage/Build/
+
+# fastlane
+fastlane/report.xml
+fastlane/Preview.html
+fastlane/screenshots/**/*.png
+fastlane/test_output
+
+# Editor noise
+*.swp
+*.swo
+.idea/
+.vscode/
+
+# AI tool local state (per-user, not portable)
+.claude/
+.cursor/
+.aider*

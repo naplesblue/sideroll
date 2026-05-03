@@ -1,0 +1,734 @@
+# SideRoll — AI 开发交接文档
+
+> 本文档是 SideRoll 项目对所有 AI 协作者（Claude Code / Codex / Cursor / Aider 等）的统一开发规范与任务清单。**接手前请完整阅读 §1–§4 + §8 当前状态**，之后从 §5 任务清单中找到第一个状态为 `TODO` 的任务继续。
+
+---
+
+## 1. 项目目标
+
+**SideRoll 是一个 macOS 原生 App**，用于把 iPhone 上"旅行期间"拍的照片自动归档到对应的相机照片文件夹。
+
+### 用户场景
+
+用户是摄影爱好者，旅行时主要用相机拍摄、iPhone 作为补充（相机不方便拿出来时的瞬间记录）。每次旅行结束的工作流是：
+
+1. 把相机的 RAW/JPG 通过 SD 卡导入到一个旅行文件夹（如 `~/Photos/Trips/2026-04-Tokyo/`）
+2. 在该文件夹内做后期编辑
+
+**痛点**：iPhone 上当时拍的补充记录目前需要在 Photos.app 里手工按时间翻找、选中、导出，是整个工作流最大的摩擦点。
+
+### SideRoll 要做的事
+
+1. 用户选一个相机照片文件夹
+2. App 读取该文件夹所有照片的 EXIF 拍摄时间，计算时间窗口（首末张 ± 缓冲）
+3. 通过 USB 直连读取 iPhone，找出落在窗口内的所有照片
+4. 显示候选缩略图，让用户预览/勾选/确认
+5. 把选中的照片复制到 `<相机文件夹>/iPhone/` 子目录
+
+---
+
+## 2. 已锁定的关键决策
+
+⚠️ 以下决策已与用户确认。如要修改必须先获得用户同意，**不要默认替换**。
+
+| 项 | 决定 | 理由 |
+|---|---|---|
+| 平台 | macOS 原生 App，SwiftUI | Web app 不能通过浏览器访问 iPhone USB（iOS 屏蔽 WebUSB 的 PTP/MTP），评估后回到原生 |
+| iPhone 读取 | USB 直连 + `ImageCaptureCore` | 不依赖 iCloud 同步状态，确保拿到原图 |
+| 时间窗口 | 相机首末张 ± 可配置缓冲（默认 ±2 小时） | 简单稳健，覆盖出门到回家 |
+| HEIC 格式 | **保留原格式，不转 JPG** | LR/C1 都已支持 HEIC，转 JPG 损失元信息 |
+| Live Photo | **连同 .MOV 一起复制** | 保留完整动效 |
+| 文件命名 | **保留 iPhone 原文件名** | 不加时间戳前缀 |
+| 导入前预览 | **必须有，强制确认** | 避免误导入大量非旅行照片 |
+| 主力 RAW 格式 | Nikon NEF | 用户主力相机品牌 |
+
+### 显式不做的事（v1 范围外）
+
+- iCloud 共享相册 / Photos 图库读取（已被 USB 直连方案替代）
+- HEIC 转 JPG
+- 时间戳前缀重命名
+- 多设备并行（一次只服务一台 iPhone）
+- 自动检测时区错误并平移窗口（v1 用 ±缓冲足够）
+
+---
+
+## 3. 项目环境
+
+| 项 | 值 |
+|---|---|
+| 项目根 | `/Volumes/雷电3/Projects/SideRoll/` |
+| Xcode | 26.4.1 |
+| macOS Deployment Target | 26.4 |
+| Swift | 5.0 |
+| Bundle ID | `nbhd.SideRoll` |
+| App Sandbox | 已开启 (`ENABLE_APP_SANDBOX = YES`) |
+| Default Actor Isolation | `MainActor`（`SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor`，注意 ImageCaptureCore delegate 的 actor 隔离问题） |
+| 文件同步模式 | `PBXFileSystemSynchronizedRootGroup`（Xcode 自动同步源文件夹下所有内容，无需手动加 `.pbxproj` 引用） |
+
+### 仓库结构
+
+```
+SideRoll/
+├── AGENTS.md                    ← 本文档
+├── CLAUDE.md                    ← 指向本文档（Claude Code 自动加载）
+├── SideRoll.xcodeproj/
+├── SideRoll/                    ← 主 target 源代码（Xcode 自动同步）
+│   ├── SideRollApp.swift
+│   ├── ContentView.swift
+│   └── Assets.xcassets/
+├── SideRollTests/               ← 单元测试
+│   └── SideRollTests.swift
+└── SideRollUITests/             ← UI 测试（v1 暂不重点维护）
+    └── SideRollUITests.swift
+```
+
+### Phase 1 之后的目标结构
+
+```
+SideRoll/
+├── App/
+│   └── SideRollApp.swift
+├── Views/
+│   ├── ContentView.swift
+│   ├── FolderDropView.swift
+│   ├── DeviceStatusView.swift
+│   ├── CandidateGridView.swift
+│   └── ImportProgressView.swift
+├── Services/
+│   ├── CameraFolderScanner.swift
+│   ├── TimeWindowResolver.swift
+│   ├── DeviceBrowser.swift
+│   ├── PhotoEnumerator.swift
+│   ├── ThumbnailLoader.swift
+│   ├── ImportEngine.swift
+│   └── LivePhotoPairing.swift
+├── Models/
+│   ├── CameraPhoto.swift
+│   ├── PhonePhoto.swift
+│   └── ImportPlan.swift
+└── Resources/
+    └── SideRoll.entitlements
+```
+
+---
+
+## 4. 架构
+
+### 数据流
+
+```
+用户拖入相机文件夹
+        ↓
+CameraFolderScanner（ImageIO 读 EXIF DateTimeOriginal）
+        ↓
+TimeWindowResolver（首末张 ± buffer）→ Date 区间 [start, end]
+        ↓
+DeviceBrowser（ICDeviceBrowser 发现 iPhone）
+        ↓
+PhotoEnumerator（遍历 ICCameraDevice.mediaFiles，按 creationDate 过滤）
+        ↓
+ThumbnailLoader（懒加载缩略图给 UI）
+        ↓
+用户在 CandidateGridView 勾选/取消
+        ↓
+ImportEngine（requestDownloadFile → 目标子文件夹）
+        ↓
+LivePhotoPairing（同 basename .HEIC + .MOV 一起下载）
+```
+
+### 关键 API 速记
+
+| 用途 | API |
+|---|---|
+| 设备发现 | `ICDeviceBrowser` + `ICDeviceBrowserDelegate.deviceBrowser(_:didAdd:moreComing:)` |
+| 过滤设备类型 | `browsedDeviceTypeMask = .camera` |
+| iPhone 文件列表 | `ICCameraDevice.mediaFiles: [ICCameraFile]`（含 `name` / `creationDate` / `fileSize` / `uti`） |
+| 缩略图（同步） | `ICCameraFile.thumbnailIfAvailable` |
+| 缩略图（异步） | `ICCameraFile.requestThumbnail(_:)` |
+| 下载 | `ICCameraDevice.requestDownloadFile(_:options:downloadDelegate:didDownloadSelector:contextInfo:)`，options 设 `ICDownloadsDirectoryURL` 和 `ICSaveAsFilename` |
+| 相机 EXIF | `ImageIO`：`CGImageSourceCreateWithURL` → `CGImageSourceCopyPropertiesAtIndex` → `kCGImagePropertyExifDictionary[kCGImagePropertyExifDateTimeOriginal]` |
+
+### Entitlements 需求
+
+需要在 `SideRoll.entitlements` 中或通过 Xcode Capabilities 启用：
+
+- `com.apple.security.app-sandbox`（已开启）
+- `com.apple.security.device.usb`（**待添加**——ImageCaptureCore 访问 iPhone）
+- `com.apple.security.files.user-selected.read-write`（**待修改**——当前 `ENABLE_USER_SELECTED_FILES = readonly`，需改成 `readwrite` 才能写入相机文件夹）
+
+⚠️ 首次插 iPhone 会触发系统授权弹窗（"允许此 Mac 访问"），用户拒绝则 `mediaFiles` 一直为空，且**没有清晰的错误码**——这是 Phase 1 最大的卡点风险。
+
+### 边界情况清单
+
+| 情况 | 处理 |
+|---|---|
+| iPhone 锁屏 | `mediaFiles` 为空。UI 显式提示"请解锁 iPhone 并允许访问" |
+| HEIC 拍摄时间 | iPhone 端用 `ICCameraFile.creationDate` 直接拿，不需要解 EXIF |
+| 时区 | `Date` 是绝对时刻，相机/iPhone 时区不同也不影响。但用户的相机时区设错时窗口会偏（v2 再做平移 UI） |
+| 大量照片性能 | `mediaFiles` 在 iPhone 上可能上万。先用 `creationDate` 过滤，再按需拉缩略图（懒加载） |
+| 重复导入 | 目标已存在同名文件 → 跳过 + 标记 `.skipped`，**绝不覆盖** |
+| 单张下载失败 | 不中断批量，最后聚合 `[failed: [(file, error)]]` |
+| 只有 .HEIC 没 .MOV | 不当错误，正常导入主图 |
+| 中途拔 iPhone | 剩余文件标记 failed，不 crash |
+
+---
+
+## 5. 任务清单
+
+> **状态字段约定**：`TODO` / `IN_PROGRESS` / `DONE` / `BLOCKED`（带原因）。AI 接手时把"开始做"的任务标 `IN_PROGRESS`，完成后标 `DONE` 并填写完成时间和提交 commit hash（如有）。
+
+### Phase 0 · 项目脚手架
+
+#### T0.1 · Xcode 项目骨架 — `DONE` (2026-05-03)
+
+**目标**：可运行的 SwiftUI macOS App 骨架。
+
+**当前状态**：已由用户在 Xcode 26.4.1 GUI 中创建。`SideRollApp.swift` + `ContentView.swift` 是默认 Hello World 模板。`PBXFileSystemSynchronizedRootGroup` 模式（自动同步文件夹）。
+
+**验收**：✅ 在 Xcode 中能 Build & Run，看到 "Hello, world!" 窗口。
+
+---
+
+#### T0.2 · Entitlements 与 Capabilities 配置 — `DONE` (2026-05-03)
+
+**目标**：让 App 拥有访问 USB 设备和写入用户选择文件夹的权限。
+
+**实现**：
+1. 创建 `SideRoll/SideRoll.entitlements` 显式声明三项：
+   - `com.apple.security.app-sandbox`
+   - `com.apple.security.device.usb`
+   - `com.apple.security.files.user-selected.read-write`
+2. `.pbxproj` 主 target Debug + Release 配置加 `CODE_SIGN_ENTITLEMENTS = SideRoll/SideRoll.entitlements;`
+3. `ENABLE_USER_SELECTED_FILES` 从 `readonly` 改为 `readwrite`（与 entitlements 保持一致，避免冲突）
+
+**验收结果**：
+- ✅ `xcodebuild build` SUCCEEDED
+- ✅ `codesign -d --entitlements -` 输出包含三项目标 entitlement（外加 Debug 自动添加的 `get-task-allow`）
+- ⏳ 启动时"选择文件夹"系统弹窗待 UI 实现后真机验证（T4.2）
+
+**坑（实际遇到的）**：
+- 没有走 Xcode GUI 而是直接编辑 `.pbxproj`，对 `PBXFileSystemSynchronizedRootGroup` 模式来说没问题，因为 `.entitlements` 文件放在 source 同步文件夹下会被自动 pick up
+- macOS 26 首次访问 USB 设备会另有"图像捕捉"系统权限弹窗，需要用户在系统设置中批准（Phase 1 实测时遇到要确认）
+
+---
+
+#### T0.3 · Git 仓库初始化 — `TODO`
+
+**目标**：项目纳入 git 版本控制。
+
+**当前状态**：项目目录不是 git 仓库。
+
+**实现要点**：
+```bash
+cd "/Volumes/雷电3/Projects/SideRoll"
+git init
+```
+
+`.gitignore` 内容（基于 GitHub 标准 Swift/Xcode 模板）：
+```
+# macOS
+.DS_Store
+
+# Xcode
+build/
+DerivedData/
+*.pbxuser
+!default.pbxuser
+*.mode1v3
+!default.mode1v3
+*.mode2v3
+!default.mode2v3
+*.perspectivev3
+!default.perspectivev3
+xcuserdata/
+*.moved-aside
+*.xccheckout
+*.xcscmblueprint
+*.hmap
+*.ipa
+*.dSYM.zip
+*.dSYM
+
+# Swift Package Manager
+.build/
+Packages/
+Package.pins
+Package.resolved
+.swiftpm/
+
+# CocoaPods (未使用但预留)
+Pods/
+
+# Carthage (未使用但预留)
+Carthage/Build
+```
+
+**验收**：
+- `git status` 不报错
+- `xcuserdata/` 不在追踪列表
+- 首次 commit 包含主 target 源文件、tests 目录、`.xcodeproj`（除 `xcuserdata`）
+
+---
+
+### Phase 1 · iPhone USB 通信打通（最高风险）
+
+> ⚠️ Phase 1 是整个项目最容易卡死的部分。建议先做 CLI 验证（在 main app 里临时加个按钮触发，把结果打到 stdout），脱离 SwiftUI 把 ImageCaptureCore 完全打通后再往 UI 上接。
+
+#### T1.1 · DeviceBrowser — `TODO`
+
+**目标**：能发现并打印连接的 iPhone 设备名。
+
+**文件**：`SideRoll/Services/DeviceBrowser.swift`
+
+**实现要点**：
+- 创建 `ICDeviceBrowser` 实例
+- 设置 `browsedDeviceTypeMask = [.camera]`（注意是 OptionSet，包 `.camera` 即可，iPhone 报告为 camera 类型）
+- 实现 `ICDeviceBrowserDelegate.deviceBrowser(_:didAdd:moreComing:)` 回调，过滤 `ICCameraDevice` 类型
+- 调用 `browser.start()`
+- `@MainActor` 注解或在主线程调用，避免 actor isolation 警告
+- 暴露 `@Published var connectedDevice: ICCameraDevice?` 给 UI
+
+**验收**：
+- 插上 iPhone（解锁状态、首次允许访问），App 启动后 ≤5 秒控制台打印 `Found device: <iPhone 名称>`
+- 拔掉 iPhone，控制台打印 `Device removed: ...`
+
+**坑**：
+- 必须保留 `ICDeviceBrowser` 强引用，否则会被释放、回调永远不触发
+- delegate 是 NSObject 协议，宿主类需要 `: NSObject, ICDeviceBrowserDelegate`，与 `MainActor` 默认隔离结合时可能需要 `@preconcurrency` 或 `nonisolated`
+
+---
+
+#### T1.2 · PhotoEnumerator v0 — `TODO`
+
+**目标**：开 session 后能列出 iPhone 上前 10 张照片的 `name` / `creationDate` / `fileSize` / `uti`。
+
+**文件**：`SideRoll/Services/PhotoEnumerator.swift`
+
+**依赖**：T1.1（需要 `ICCameraDevice` 实例）
+
+**实现要点**：
+- 调用 `device.requestOpenSession()`
+- 实现 `ICCameraDeviceDelegate.cameraDevice(_:didReceiveMetadataFor:)` 或等待 `cameraDevice(_:didAddItem:)` 回调
+- 读 `device.mediaFiles: [ICCameraFile]?`
+- 排序后取前 10 打印
+
+**验收**：
+- 解锁 iPhone 后控制台输出 10 行：`<filename> | <creationDate> | <fileSize> bytes | <uti>`
+- `creationDate` 非 nil 且与 iPhone 上 Photos.app 显示的拍摄时间一致
+
+**卡点预案**：
+- 如果 `mediaFiles` 长时间为空：
+  1. 先在系统"图像捕捉"App 验证 iPhone 设备可见，确认硬件层 OK
+  2. 检查 entitlement（T0.2）和系统设置 → 隐私与安全 → 文件与文件夹/可移动卷
+  3. 检查 iPhone 端"信任此电脑"是否点过
+  4. 检查 `mediaFiles` 是否需要等 `device.contentCatalog` 的某个 ready 通知
+
+---
+
+#### T1.3 · ThumbnailLoader — `TODO`
+
+**目标**：异步拉一张照片的缩略图，落到 `NSImage`。
+
+**文件**：`SideRoll/Services/ThumbnailLoader.swift`
+
+**依赖**：T1.2
+
+**实现要点**：
+- 输入 `ICCameraFile`，输出 `NSImage`
+- 优先用 `file.thumbnailIfAvailable`（同步，可能为 nil）
+- 否则调用 `file.requestThumbnail()` 或类似异步 API（具体 API 名查 ImageCaptureCore 文档，macOS 26 可能有变化）
+- 用 `async/await` 包装，避免 callback 嵌套
+
+**验收**：
+- 写一个测试函数：取 `mediaFiles[0]`，加载缩略图，保存到 `/tmp/thumb.jpg`，肉眼看正常
+- 缩略图尺寸约 256x256，不是占位符
+
+**坑**：
+- `thumbnailIfAvailable` 可能持续返回 nil，要触发请求后等 delegate 回调
+- 缩略图请求是异步的，不要在 UI 主线程同步等待
+
+---
+
+### Phase 2 · 相机文件夹解析
+
+#### T2.1 · CameraPhoto 模型 — `TODO`
+
+**文件**：`SideRoll/Models/CameraPhoto.swift`
+
+```swift
+struct CameraPhoto: Identifiable, Hashable {
+    let id: URL          // 用 url 当 id
+    var url: URL { id }
+    let captureDate: Date
+}
+```
+
+**验收**：编译通过，可被 `CameraFolderScanner` 返回。
+
+---
+
+#### T2.2 · CameraFolderScanner — `TODO`
+
+**目标**：扫描相机文件夹，返回每张照片的 `(URL, captureDate)`。
+
+**文件**：`SideRoll/Services/CameraFolderScanner.swift`
+
+**实现要点**：
+- 用 `FileManager.default.enumerator(at:includingPropertiesForKeys:options:)` 递归遍历
+- 跳过 `.DS_Store`、子文件夹、非图片文件（按扩展名白名单 `["jpg","jpeg","heic","nef","cr2","cr3","arw","raf","dng"]`）
+- 对每个文件用 `ImageIO`：
+  ```swift
+  let src = CGImageSourceCreateWithURL(url as CFURL, nil)
+  let props = CGImageSourceCopyPropertiesAtIndex(src, 0, nil) as? [CFString: Any]
+  let exif = props?[kCGImagePropertyExifDictionary] as? [CFString: Any]
+  let dateString = exif?[kCGImagePropertyExifDateTimeOriginal] as? String
+  // dateString 格式："2026:05:03 15:30:22"，用 DateFormatter 解析
+  ```
+- 解析失败的文件跳过 + warn log，不中断整体扫描
+
+**验收**：
+- 指向真实相机文件夹（包含 NEF + JPG）能返回 `[CameraPhoto]`，数量与文件夹中图片数一致
+- 每张 `captureDate` 与文件 EXIF 一致（用 `mdls -name kMDItemContentCreationDate <file>` 对比）
+
+**坑**：
+- EXIF 时间字符串格式是 `"yyyy:MM:dd HH:mm:ss"`（冒号分隔日期），不是 ISO8601
+- 文件 modification date ≠ EXIF DateTimeOriginal，**必须**读 EXIF
+- 大文件夹（500+ 张）扫描应放在后台线程，UI 显示进度
+
+---
+
+#### T2.3 · NEF 兼容性 smoke test — `TODO`
+
+**目标**：确认用户主力 Nikon NEF 文件能被 ImageIO 解析出 `captureDate`。
+
+**实现要点**：
+- 找一张真实 NEF 文件
+- 跑 `CameraFolderScanner`，确认 `captureDate` 非 nil 且正确
+
+**验收**：
+- 单元测试或 playground 跑通
+- 时间与 NEF 内嵌 EXIF 一致（用 `exiftool -DateTimeOriginal <file.nef>` 对比）
+
+**备注**：ImageIO 原生支持 NEF，无需额外依赖。如果失败先确认 NEF 文件没坏（用 Preview 能打开）。
+
+---
+
+#### T2.4 · TimeWindowResolver + 单元测试 — `TODO`
+
+**文件**：`SideRoll/Services/TimeWindowResolver.swift`、`SideRollTests/TimeWindowResolverTests.swift`
+
+**API**：
+```swift
+struct TimeWindow {
+    let start: Date
+    let end: Date
+}
+
+enum TimeWindowResolver {
+    static func resolve(photos: [CameraPhoto], buffer: TimeInterval = 7200) -> TimeWindow?
+    // 返回 nil 当 photos 为空
+}
+```
+
+**单测覆盖**：
+- 空数组 → nil
+- 单张 → start/end 都是该张时间 ± buffer
+- 多张 → start = 最早 - buffer, end = 最晚 + buffer
+- buffer = 0 → start = 最早, end = 最晚
+
+**验收**：单测全绿，`xcodebuild test` 通过。
+
+---
+
+### Phase 3 · 导入引擎
+
+#### T3.1 · ImportEngine 基础下载 — `TODO`
+
+**目标**：从 iPhone 拷一张 HEIC 到 `<相机文件夹>/iPhone/`。
+
+**文件**：`SideRoll/Services/ImportEngine.swift`
+
+**实现要点**：
+- 输入：`ICCameraFile` 数组、目标文件夹 URL
+- 创建子目录 `<目标>/iPhone/`（如不存在）
+- 对每个 file 调用 `device.requestDownloadFile(...)`，options:
+  ```swift
+  [
+    ICDownloadsDirectoryURL: targetSubfolder,
+    ICSaveAsFilename: file.name  // 保留 iPhone 原文件名
+  ]
+  ```
+- 实现 `downloadDelegate` 回调收集结果
+
+**验收**：
+- 能拷一张 HEIC 到目标目录
+- 文件大小、可用 Preview 打开
+- EXIF 拍摄时间保留（用 `exiftool` 或 `mdls` 对比）
+
+---
+
+#### T3.2 · LivePhotoPairing — `TODO`
+
+**目标**：识别同 basename 的 `.HEIC` + `.MOV`，导入时一起拷。
+
+**文件**：`SideRoll/Services/LivePhotoPairing.swift`
+
+**实现要点**：
+- 给定 `[ICCameraFile]`，按 basename（去扩展名）分组
+- 一组里同时有 `.HEIC` 和 `.MOV` 即视为 Live Photo
+- 用户选了 .HEIC → 自动把对应 .MOV 加入下载队列（不在 UI 上额外显示，作为隐含行为）
+
+**验收**：
+- 拷一张 Live Photo 后，目标目录下 `IMG_xxxx.HEIC` 与 `IMG_xxxx.MOV` 都在
+- 文件名 basename 一致
+
+---
+
+#### T3.3 · 幂等 — `TODO`
+
+**目标**：目标已存在同名文件 → 跳过，不覆盖。
+
+**实现要点**：
+- 在 `ImportEngine` 入口处检查 `FileManager.default.fileExists(atPath:)`
+- 已存在 → 加入 `skipped: [URL]` 列表，不调用 download
+
+**验收**：
+- 连续运行两次完整导入，第二次报告全部 `skipped`，目标目录文件 mtime 与第一次相同（未被覆盖）
+
+---
+
+#### T3.4 · 失败收集 — `TODO`
+
+**目标**：单张失败不中断批量，最后给完整失败列表。
+
+**实现要点**：
+- 维护 `var results: [(file: ICCameraFile, status: ImportStatus)]`
+- `ImportStatus` 枚举：`success(URL)` / `skipped` / `failed(Error)`
+- 模拟测试：导入中途拔 iPhone，剩余文件标 failed 不 crash
+
+**验收**：
+- 拔线场景下 App 不 crash
+- UI 上显示失败列表（在 T4.5 实现）
+
+---
+
+### Phase 4 · SwiftUI 串接
+
+#### T4.1 · ContentView 主布局 — `TODO`
+
+**文件**：`SideRoll/Views/ContentView.swift`
+
+**布局**：
+```
+┌─────────────────────────────────────────────┐
+│ [Sidebar]      │  [Main]                    │
+│ - 相机文件夹    │  候选缩略图网格             │
+│   卡片 + drop  │  (LazyVGrid)               │
+│ - 设备状态     │                            │
+│ - 缓冲滑块     │                            │
+│ - 导入按钮     │  ─────────────────────────  │
+│                │  [Import Progress]         │
+└─────────────────────────────────────────────┘
+```
+
+**验收**：基本布局可见，无功能也行。
+
+---
+
+#### T4.2 · FolderDropView — `TODO`
+
+**目标**：支持拖拽 + 浏览选相机文件夹，触发扫描和窗口计算。
+
+**实现要点**：
+- 用 `.onDrop(of: [.fileURL], ...)` + `NSOpenPanel`
+- 选定后调用 `CameraFolderScanner.scan()` → `TimeWindowResolver.resolve()`
+- 显示窗口 `[start, end]`、缓冲滑块（默认 2h，范围 0–12h）
+- 缓冲滑块变化 → 重算窗口 → 触发候选刷新
+
+**验收**：
+- 拖一个真实相机文件夹进去，5 秒内显示窗口范围
+- 调整缓冲滑块，窗口实时更新
+
+---
+
+#### T4.3 · DeviceStatusView — `TODO`
+
+**目标**：显示 iPhone 状态：未连接 / 已连接但锁屏 / 就绪。
+
+**实现要点**：
+- 监听 `DeviceBrowser` 的 `connectedDevice`
+- 三态：
+  - `nil` → 灰色 + "未连接 iPhone"
+  - 非 nil 但 `mediaFiles` 为 nil/空 → 黄色 + "请解锁 iPhone 并允许访问"
+  - 就绪 → 绿色 + 设备名
+- 就绪时自动触发 `PhotoEnumerator`
+
+**验收**：插拔 iPhone、锁屏/解锁状态切换，UI 正确反应。
+
+---
+
+#### T4.4 · CandidateGridView — `TODO`
+
+**目标**：缩略图网格 + 时间标签 + 单张勾选。
+
+**实现要点**：
+- `LazyVGrid` 列宽 ~120px
+- 每格：缩略图 + 拍摄时间 + 勾选框（默认全选）
+- 缩略图懒加载：用 `task(id:)` 或 `onAppear`，屏幕外不请求
+- 候选数量大（200+）时滚动应流畅
+
+**验收**：
+- 200+ 候选下滚动流畅（无明显卡顿）
+- 缩略图陆续填充，未填充时显示占位
+- 勾选状态变化即时反映
+
+---
+
+#### T4.5 · ImportProgressView — `TODO`
+
+**目标**：进度条 + 实时日志 + 完成后失败列表。
+
+**实现要点**：
+- `ProgressView(value:total:)` 显示 N / total
+- 完成后展示 `[(file, status)]`，failed 红色、skipped 灰色、success 绿色
+- 支持中途取消（设置 cancellation flag，下一张不再 download）
+
+**验收**：
+- 导入 50 张照片过程中 UI 不卡，进度实时更新
+- 取消按钮在 1 秒内停止后续下载
+
+---
+
+### Phase 5 · 端到端验收与调优
+
+#### T5.1 · 真实旅行验收 — `TODO`
+
+**目标**：用最近一次真实旅行完整跑一遍，对比手工选片。
+
+**记录指标**：
+- 漏选数（应该被选中但没出现在候选里的）
+- 多选数（不该选中但出现的）
+- Live Photo 配对正确率
+- HEIC EXIF 拍摄时间一致性
+- 总耗时（vs 手工流程）
+
+**验收**：完成报告，记录数据。
+
+---
+
+#### T5.2 · 默认缓冲值调优 — `TODO`
+
+**目标**：根据 T5.1 漏选/多选数据，调整默认缓冲值。
+
+**思路**：
+- 漏选多 → 缓冲偏小，调大默认值（如 4h）
+- 多选多 → 缓冲偏大，调小默认值（如 1h）
+- 极端情况（清晨摸黑出门、深夜返程）考虑提供"按相机日期整天"模式作为备选
+
+**验收**：默认值更新到代码 + 验证逻辑通过。
+
+---
+
+#### T5.3 · README — `TODO`
+
+**目标**：使用说明 + 已知限制。
+
+**内容**：
+- 一句话项目介绍
+- 使用步骤（截图）
+- 系统要求（macOS 26.4+）
+- 已知限制（仅 USB 直连、不支持 iCloud 同步未下载的照片等）
+- 故障排查（iPhone 不显示、mediaFiles 为空等）
+
+---
+
+## 6. 端到端验证协议
+
+每个 Phase 完成后必跑的 smoke test：
+
+| 检验点 | 操作 | 通过标准 |
+|---|---|---|
+| 设备发现 | 插上 iPhone 后启动 App | ≤5s 显示设备名 |
+| 窗口计算 | 拖入真实多日旅行文件夹 | 打印的 [start, end] 肉眼覆盖整次旅行 |
+| 候选准确性 | iPhone 上人为准备 N 张旅行内 + M 张旅行外照片 | 候选列表数量 = N（允许 ±缓冲带来的边界波动） |
+| Live Photo 配对 | 选一张 Live Photo 导入 | 目标目录 .HEIC + .MOV 都在，basename 相同 |
+| HEIC 完整性 | 导入后用 Preview 打开 + `exiftool` 对比 | 可正常显示，DateTimeOriginal 与原始一致 |
+| 幂等 | 连续点两次"导入" | 第二次全部 skipped，文件 mtime 不变 |
+| 失败恢复 | 导入中途拔 iPhone | 不 crash，剩余标 failed |
+| 最终验收 | 真实旅行完整跑 | 漏选 ≤ 5%、多选 ≤ 10%（实际数据，可调） |
+
+---
+
+## 7. 编码规范
+
+### Swift 风格
+
+- 默认所有 UI 相关代码 `@MainActor`（项目级默认已开）
+- Service 层用 `actor` 或显式 `nonisolated`，避免不必要的主线程阻塞
+- ImageCaptureCore delegate 类用 `final class XxxDelegate: NSObject, ICDeviceBrowserDelegate`，并视情况 `@preconcurrency` 兼容
+- 异步优先用 `async/await`，老式 callback API 包装成 async
+- 错误用 `enum XxxError: Error`，不要 throw `NSError`
+
+### 文件组织
+
+- 一个 file 一个主类型（class/struct/enum）
+- 同类型扩展放同 file 末尾
+- View 文件不超过 300 行，超过就拆 subview
+
+### 注释
+
+- 默认不写注释。代码自说明。
+- 唯一例外：**为什么**这么写而不是别的（API 行为坑、性能权衡、隐藏约束）
+
+### 错误处理
+
+- 用户可见错误必须有人话描述（"请解锁 iPhone"，不是 "ICError code 12"）
+- 内部错误打 log（`os.Logger`），不要 fatalError
+
+---
+
+## 8. 当前状态 / 接手须知
+
+> **本节是接手 AI 必读**。每次有 token 用尽切换、或长时间会话压缩前，应更新本节。
+
+### 整体进度
+
+| Phase | 状态 |
+|---|---|
+| 0 · 脚手架 | 2/3 完成（T0.1、T0.2 done，T0.3 待做） |
+| 1 · iPhone USB | 0/3 |
+| 2 · 相机解析 | 0/4 |
+| 3 · 导入引擎 | 0/4 |
+| 4 · SwiftUI | 0/5 |
+| 5 · 验收 | 0/3 |
+
+### 下一步
+
+**第一个待做任务：T0.3 · Git 仓库初始化**（参见 §5）
+
+### 已知问题 / 开放问题
+
+- 暂无。
+
+### 接手 checklist
+
+1. 读完 §1–§4 + §8（本节）
+2. 跑 `xcodebuild -scheme SideRoll build` 确认当前能 build
+3. 找到第一个 `TODO` 任务（T0.2），把它标 `IN_PROGRESS`
+4. 完成后标 `DONE` + 日期 + commit hash（如已 git）
+5. 更新 §8 整体进度表
+
+### 与用户沟通的边界
+
+用户已在 §2 锁定关键决策。**未经用户同意不要改：**
+
+- 不要默认加 HEIC→JPG 转换
+- 不要默认加时间戳前缀重命名
+- 不要换走 USB 路径（比如改用 Photos 图库）
+- 不要把 SwiftUI 拆成多 target / 引入大型依赖（如 RxSwift、SnapKit）
+
+如遇到这些场景认为有必要打破约束，**先停下来问用户**，不要默默改。
+
+---
+
+**最后更新**：2026-05-03 by Claude Opus 4.7
