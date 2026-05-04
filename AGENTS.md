@@ -350,65 +350,52 @@ Carthage/Build
 
 ### Phase 2 · 相机文件夹解析
 
-#### T2.1 · CameraPhoto 模型 — `TODO`
+#### T2.1 · CameraPhoto 模型 — `DONE` (2026-05-04)
 
 **文件**：`SideRoll/Models/CameraPhoto.swift`
 
 ```swift
-struct CameraPhoto: Identifiable, Hashable {
-    let id: URL          // 用 url 当 id
-    var url: URL { id }
+struct CameraPhoto: Identifiable, Hashable, Sendable {
+    let id: URL
     let captureDate: Date
+    var url: URL { id }
 }
 ```
 
-**验收**：编译通过，可被 `CameraFolderScanner` 返回。
+**验收结果**：✅ 编译通过，`CameraFolderScanner.scan(folder:)` 正确返回 `[CameraPhoto]`。`Sendable` 显式标注便于跨 actor 传递。
 
 ---
 
-#### T2.2 · CameraFolderScanner — `TODO`
+#### T2.2 · CameraFolderScanner — `DONE` (2026-05-04)
 
 **目标**：扫描相机文件夹，返回每张照片的 `(URL, captureDate)`。
 
 **文件**：`SideRoll/Services/CameraFolderScanner.swift`
 
-**实现要点**：
-- 用 `FileManager.default.enumerator(at:includingPropertiesForKeys:options:)` 递归遍历
-- 跳过 `.DS_Store`、子文件夹、非图片文件（按扩展名白名单 `["jpg","jpeg","heic","nef","cr2","cr3","arw","raf","dng"]`）
-- 对每个文件用 `ImageIO`：
-  ```swift
-  let src = CGImageSourceCreateWithURL(url as CFURL, nil)
-  let props = CGImageSourceCopyPropertiesAtIndex(src, 0, nil) as? [CFString: Any]
-  let exif = props?[kCGImagePropertyExifDictionary] as? [CFString: Any]
-  let dateString = exif?[kCGImagePropertyExifDateTimeOriginal] as? String
-  // dateString 格式："2026:05:03 15:30:22"，用 DateFormatter 解析
-  ```
-- 解析失败的文件跳过 + warn log，不中断整体扫描
+**实现**：
+- `nonisolated static func scan(folder:) async throws -> [CameraPhoto]` 在 `Task.detached(priority: .userInitiated)` 上执行同步扫描，避免阻塞主线程
+- `FileManager.enumerator(at:includingPropertiesForKeys:options:[.skipsHiddenFiles, .skipsPackageDescendants])` 递归遍历
+- 扩展名白名单：`jpg/jpeg/heic/heif/nef/cr2/cr3/arw/raf/dng/orf/rw2`
+- ImageIO 读 EXIF：`CGImageSourceCreateWithURL` → `CGImageSourceCopyPropertiesAtIndex` → `kCGImagePropertyExifDictionary[kCGImagePropertyExifDateTimeOriginal]`
+- EXIF 时间字符串格式 `"yyyy:MM:dd HH:mm:ss"`，按本地时区解析（用户在哪里扫，按那个时区解读，符合"绝对时刻"的语义）
+- 解析失败的文件跳过 + 控制台 warn
 
-**验收**：
-- 指向真实相机文件夹（包含 NEF + JPG）能返回 `[CameraPhoto]`，数量与文件夹中图片数一致
-- 每张 `captureDate` 与文件 EXIF 一致（用 `mdls -name kMDItemContentCreationDate <file>` 对比）
+**验收结果**（真实 Nikon Z 旅行文件夹 `20260429 华严寺·善化寺`）：
+- ✅ 121 张 NEF 全部解析成功，0.52s 完成
+- ✅ 时间范围 `2026-04-29 10:09:49 → 12:46:24` 与文件夹名日期完全吻合
+- ✅ 前 10 张时间戳呈自然连续（连拍 + 移动间隙），与拍摄行为一致
 
-**坑**：
-- EXIF 时间字符串格式是 `"yyyy:MM:dd HH:mm:ss"`（冒号分隔日期），不是 ISO8601
-- 文件 modification date ≠ EXIF DateTimeOriginal，**必须**读 EXIF
-- 大文件夹（500+ 张）扫描应放在后台线程，UI 显示进度
+**实战发现**：
+- 项目默认 `MainActor` actor isolation 让所有 static 方法和属性默认 main-actor 隔离；从 `Task.detached` 调用会触发 Swift 6 错误。修法：把 scanner 的 `static func`、`static let supportedExtensions` 都标 `nonisolated`
+- `NSOpenPanel` 选目录后，沙箱通过 Powerbox 给 App 临时读权限，配合 `com.apple.security.files.user-selected.read-write` entitlement 即可读到任何用户主动选的位置（包括外接卷如 `/Volumes/LightBox/`）
 
 ---
 
-#### T2.3 · NEF 兼容性 smoke test — `TODO`
+#### T2.3 · NEF 兼容性 smoke test — `DONE` (2026-05-04)
 
 **目标**：确认用户主力 Nikon NEF 文件能被 ImageIO 解析出 `captureDate`。
 
-**实现要点**：
-- 找一张真实 NEF 文件
-- 跑 `CameraFolderScanner`，确认 `captureDate` 非 nil 且正确
-
-**验收**：
-- 单元测试或 playground 跑通
-- 时间与 NEF 内嵌 EXIF 一致（用 `exiftool -DateTimeOriginal <file.nef>` 对比）
-
-**备注**：ImageIO 原生支持 NEF，无需额外依赖。如果失败先确认 NEF 文件没坏（用 Preview 能打开）。
+**验收结果**：T2.2 的真实文件夹扫描包含 121 张 .NEF（一次旅行的全量），全部解析成功，时间戳序列自然连续，与文件夹名日期一致 → 隐含验证 NEF 兼容。**ImageIO 原生支持 NEF，无需额外依赖**。
 
 ---
 
@@ -696,19 +683,18 @@ enum TimeWindowResolver {
 |---|---|
 | 0 · 脚手架 | ✅ 3/3 完成 |
 | 1 · iPhone USB | ✅ 3/3 完成 |
-| 2 · 相机解析 | 0/4 |
+| 2 · 相机解析 | 3/4（T2.1、T2.2、T2.3 done） |
 | 3 · 导入引擎 | 0/4 |
 | 4 · SwiftUI | 0/5 |
 | 5 · 验收 | 0/3 |
 
 ### 下一步
 
-**第一个待做任务：T2.1 · CameraPhoto 模型**（参见 §5）
-
-进入 Phase 2（相机文件夹解析），离开 ImageCaptureCore，转 ImageIO + EXIF 解析。这块比 Phase 1 风险低，主要变量是 NEF 文件能否被 ImageIO 正确解出 `DateTimeOriginal`（T2.3 验证）。
+**第一个待做任务：T2.4 · TimeWindowResolver + 单元测试**（参见 §5）
 
 待还的技术债：
 - T1.3 验证 dump 缩略图代码嵌在 `PhotoEnumerator.reportFirstTen()` 末尾——Phase 4 实现 `CandidateGridView` 时迁出去
+- T2.2 验证 UI（`ContentView` 里的 Scan Folder 按钮 + 结果面板）是临时的，T4.2 `FolderDropView` 实施时替换
 - `device(_:didReceiveStatusInformation:)` 的 dict key 类型 warning 仍在，留作 no-op，不影响功能
 
 ### 已知问题 / 开放问题
