@@ -298,30 +298,31 @@ Carthage/Build
 
 ---
 
-#### T1.2 · PhotoEnumerator v0 — `TODO`
+#### T1.2 · PhotoEnumerator v0 — `DONE` (2026-05-04)
 
 **目标**：开 session 后能列出 iPhone 上前 10 张照片的 `name` / `creationDate` / `fileSize` / `uti`。
 
 **文件**：`SideRoll/Services/PhotoEnumerator.swift`
 
-**依赖**：T1.1（需要 `ICCameraDevice` 实例）
+**实现**：
+- `final class PhotoEnumerator: NSObject, ObservableObject`，由 `SideRollApp` 通过 `.onReceive(deviceBrowser.$connectedDevice)` 在设备就绪时实例化并 `start()`
+- `start()` 设置 `device.delegate = self` 后调用 `requestOpenSession()`
+- 用 `deviceDidBecomeReady(withCompleteContentCatalog:)` 作为"枚举完成"的可靠信号触发 `reportFirstTen()`，避开"延时等待"的不可靠
+- `mediaFiles` 元素在 macOS 26 SDK 中是 `[ICCameraItem]`，`fileSize` 在 `ICCameraFile` 子类——需 `compactMap { $0 as? ICCameraFile }`
 
-**实现要点**：
-- 调用 `device.requestOpenSession()`
-- 实现 `ICCameraDeviceDelegate.cameraDevice(_:didReceiveMetadataFor:)` 或等待 `cameraDevice(_:didAddItem:)` 回调
-- 读 `device.mediaFiles: [ICCameraFile]?`
-- 排序后取前 10 打印
+**验收结果**（NaplesIP17Pro 真机）：
+- ✅ 1712 张照片完整枚举
+- ✅ 首 10 张按 `creationDate` ASC 排序输出 `name | date | size | uti` 全字段
+- ✅ 锁屏边界情况实测通过：session 初次 open 失败（"Please unlock"）→ 用户解锁 → `cameraDeviceDidRemoveAccessRestriction` → `didAdd` 批量到达 → `deviceDidBecomeReady(withCompleteContentCatalog:)` 触发汇报，全程不需手动重试
 
-**验收**：
-- 解锁 iPhone 后控制台输出 10 行：`<filename> | <creationDate> | <fileSize> bytes | <uti>`
-- `creationDate` 非 nil 且与 iPhone 上 Photos.app 显示的拍摄时间一致
-
-**卡点预案**：
-- 如果 `mediaFiles` 长时间为空：
-  1. 先在系统"图像捕捉"App 验证 iPhone 设备可见，确认硬件层 OK
-  2. 检查 entitlement（T0.2）和系统设置 → 隐私与安全 → 文件与文件夹/可移动卷
-  3. 检查 iPhone 端"信任此电脑"是否点过
-  4. 检查 `mediaFiles` 是否需要等 `device.contentCatalog` 的某个 ready 通知
+**实战发现**：
+- macOS 26 SDK 的 `ICCameraDeviceDelegate` 多个方法签名都改了：
+  - 旧 `didAddItems:` → 新 `didAdd:`（直接覆盖原单项 `didAdd:item:`）
+  - 旧 `didReceiveThumbnailFor:` → 新 `didReceiveThumbnail:for:error:`（增加 thumbnail 和 error 参数）
+  - 旧 `didReceiveMetadataFor:` 同理
+  - 多了一个必须实现的 `deviceDidBecomeReady(withCompleteContentCatalog: ICCameraDevice)`
+- iPhone 通过 ImageCaptureCore 报告的 `uti` 是泛化的 `public.image`，**不是** `public.heic` / `public.jpeg`——后续区分文件类型必须用扩展名（`.HEIC`、`.JPG`、`.MOV`），不能依赖 UTI。这影响 T3.2 LivePhotoPairing 的实现策略（已经按扩展名匹配，所以不影响）
+- ICDeviceDelegate.`device(_:didReceiveStatusInformation:)` 的 dict key 类型是 `ICStatusNotificationKeys` 而非 `String`，目前留作 no-op 带个 warning，不影响功能
 
 ---
 
@@ -696,7 +697,7 @@ enum TimeWindowResolver {
 | Phase | 状态 |
 |---|---|
 | 0 · 脚手架 | ✅ 3/3 完成 |
-| 1 · iPhone USB | 1/3（T1.1 done） |
+| 1 · iPhone USB | 2/3（T1.1、T1.2 done） |
 | 2 · 相机解析 | 0/4 |
 | 3 · 导入引擎 | 0/4 |
 | 4 · SwiftUI | 0/5 |
@@ -704,12 +705,12 @@ enum TimeWindowResolver {
 
 ### 下一步
 
-**第一个待做任务：T1.2 · PhotoEnumerator v0**（参见 §5）
+**第一个待做任务：T1.3 · ThumbnailLoader**（参见 §5）
 
-⚠️ T1.2 提醒：
-- `mediaFiles` 不是同步可读——必须先 `device.requestOpenSession()`，session 打开后还要等 `cameraDevice(_:didAddItems:)` 系列 delegate 回调把内容枚举完
-- iPhone 上文件可能上万，先打前 10 验证就行，不要一次性全部 print
-- 如果 `mediaFiles` 一直空：先在系统"图像捕捉"App 验证 iPhone 可见，再排查 entitlement / 信任此电脑
+⚠️ T1.3 提醒：
+- macOS 26 SDK 把 `didReceiveThumbnail:` 加上了 `thumbnail: CGImage?` 和 `error:` 参数——缩略图直接在 callback 里给，不用再二次访问属性
+- `ICCameraFile.thumbnailIfAvailable` 可能仍 nil，必须主动调 `requestThumbnail()` 触发请求
+- 缩略图请求是异步的，UI 不要同步等
 
 ### 已知问题 / 开放问题
 
