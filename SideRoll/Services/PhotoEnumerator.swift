@@ -9,8 +9,9 @@ import ImageCaptureCore
 
 final class PhotoEnumerator: NSObject, ObservableObject {
     @Published private(set) var totalCount: Int = 0
+    @Published private(set) var availableFiles: [ICCameraFile] = []  // sorted by captureDate ASC
 
-    private let device: ICCameraDevice
+    let device: ICCameraDevice
     private var hasScheduledReport = false
     private var hasReported = false
     private var pendingThumbnails: [ObjectIdentifier: CheckedContinuation<CGImage, Error>] = [:]
@@ -75,6 +76,7 @@ final class PhotoEnumerator: NSObject, ObservableObject {
         let sorted = files.sorted {
             ($0.creationDate ?? .distantPast) < ($1.creationDate ?? .distantPast)
         }
+        availableFiles = sorted
         print("[PhotoEnumerator] First 10 by creationDate (out of \(files.count) total):")
         let formatter = ISO8601DateFormatter()
         for f in sorted.prefix(10) {

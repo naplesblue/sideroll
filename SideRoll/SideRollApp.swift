@@ -12,7 +12,7 @@ struct SideRollApp: App {
 
     var body: some Scene {
         WindowGroup {
-            ContentView()
+            ContentView(enumerator: enumerator)
                 .environmentObject(deviceBrowser)
                 .task {
                     deviceBrowser.start()

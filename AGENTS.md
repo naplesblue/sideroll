@@ -428,28 +428,27 @@ enum TimeWindowResolver {
 
 ### Phase 3 · 导入引擎
 
-#### T3.1 · ImportEngine 基础下载 — `TODO`
+#### T3.1 · ImportEngine 基础下载 — `DONE` (2026-05-04)
 
 **目标**：从 iPhone 拷一张 HEIC 到 `<相机文件夹>/iPhone/`。
 
 **文件**：`SideRoll/Services/ImportEngine.swift`
 
-**实现要点**：
-- 输入：`ICCameraFile` 数组、目标文件夹 URL
-- 创建子目录 `<目标>/iPhone/`（如不存在）
-- 对每个 file 调用 `device.requestDownloadFile(...)`，options:
-  ```swift
-  [
-    ICDownloadsDirectoryURL: targetSubfolder,
-    ICSaveAsFilename: file.name  // 保留 iPhone 原文件名
-  ]
-  ```
-- 实现 `downloadDelegate` 回调收集结果
+**实现**：
+- `final class ImportEngine: NSObject` 持有 `device: ICCameraDevice` + `pending: [ObjectIdentifier: PendingDownload]` 续延注册表
+- `download(file:to:) async throws -> URL`：先 `createDirectory(...)` 确保 `<target>/iPhone/` 存在，存好预测的 targetURL，再调用 `device.requestDownloadFile(_:options:downloadDelegate:didDownloadSelector:contextInfo:)`，options 用 `ICDownloadOption` 类型化 key：`.downloadsDirectoryURL` / `.saveAsFilename`
+- 实现 `ICCameraDeviceDownloadDelegate.didDownloadFile(_:error:options:contextInfo:)`，按 `ObjectIdentifier(file)` 找到对应续延，成功时返回预存的 targetURL
 
-**验收**：
-- 能拷一张 HEIC 到目标目录
-- 文件大小、可用 Preview 打开
-- EXIF 拍摄时间保留（用 `exiftool` 或 `mdls` 对比）
+**验收结果**（外接卷 `/Volumes/LightBox/Nikon Z/2026/20260428 云冈石窟·华严寺夕阳/`）：
+- ✅ `IMG_2523.HEIC` 0.05s 拷到 `<target>/iPhone/`
+- ✅ 字节级一致：source on device 3,403,583 bytes = size on disk 3,403,583 bytes（无转码、无损）
+- ✅ Preview 能正常打开
+- ✅ 中文路径 + 外接卷 + 中点分隔符全部正常
+
+**实战发现**：
+- macOS 26 SDK：`options` 参数现在是类型化的 `[ICDownloadOption: Any]`（不是 `[String: Any]`），但 protocol 回调里 `options` 仍是 `[String: Any]`——双向不对称
+- 不要试图从回调里解 options 字典还原 targetURL（key 类型不一致很麻烦）。**直接在发请求时把预测的 targetURL 存进 pending 字典**，回调时取出更干净
+- 别在自己的方法上加 `@objc private` 试图重命名——那会和 protocol 的 optional `didDownloadFile` 方法 selector 冲突。直接实现 protocol 方法，签名严格按 SDK 给的（`options: [String: Any] = [:]`）
 
 ---
 
@@ -684,18 +683,17 @@ enum TimeWindowResolver {
 | 0 · 脚手架 | ✅ 3/3 完成 |
 | 1 · iPhone USB | ✅ 3/3 完成 |
 | 2 · 相机解析 | ✅ 4/4 完成 |
-| 3 · 导入引擎 | 0/4 |
+| 3 · 导入引擎 | 1/4（T3.1 done） |
 | 4 · SwiftUI | 0/5 |
 | 5 · 验收 | 0/3 |
 
 ### 下一步
 
-**第一个待做任务：T3.1 · ImportEngine 基础下载**（参见 §5）
+**第一个待做任务：T3.2 · LivePhotoPairing**（参见 §5）
 
-⚠️ 进入 Phase 3 提醒：
-- `requestDownloadFile(_:options:downloadDelegate:didDownloadSelector:contextInfo:)` 在 macOS 26 SDK 可能签名也变了——需要先看 SDK 头文件确认（参考 T1.2 的 `didAddItems` → `didAdd` 经验）
-- 下载是异步的，options 字典 key 可能改成 `ICDownloadOption` 类型而非 `String`
-- 下载完成后回调里给的是文件 URL（写到了 `ICDownloadsDirectoryURL`），可以校验是否真存在
+⚠️ T3.2 提醒：
+- iPhone 上 Live Photo 的 .HEIC 主图 + .MOV 视频是同 basename 不同 ext 的两个文件，都通过 ICCameraDevice.mediaFiles 列出——通过 `extension` 而非 `uti` 判断（iPhone 的 uti 都是泛化的 `public.image`）
+- 配对单位是"basename"，配对失败（只有 .HEIC 没 .MOV，或反之）不是错误，正常导入
 
 待还的技术债：
 - T1.3 验证 dump 缩略图代码嵌在 `PhotoEnumerator.reportFirstTen()` 末尾——Phase 4 实现 `CandidateGridView` 时迁出去

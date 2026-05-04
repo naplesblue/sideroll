@@ -11,7 +11,7 @@ struct TimeWindow: Hashable, Sendable {
 }
 
 enum TimeWindowResolver {
-    static let defaultBuffer: TimeInterval = 7200  // 2 hours
+    nonisolated static let defaultBuffer: TimeInterval = 7200  // 2 hours
 
     nonisolated static func resolve(
         photos: [CameraPhoto],
