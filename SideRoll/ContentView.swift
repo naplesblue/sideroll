@@ -5,14 +5,24 @@
 
 import SwiftUI
 import AppKit
+import Combine
 import ImageCaptureCore
 
 struct ContentView: View {
     var enumerator: PhotoEnumerator?
 
-    @State private var output: String = "1. Click Scan Folder… to pick a target folder.\n2. Plug in iPhone (wait for ready in console).\n3. Click Import Latest iPhone Photo to copy one to <target>/iPhone/."
+    @State private var output: String = "1. Click Scan Folder… to pick a target folder.\n2. Plug in iPhone (wait for green status).\n3. Click Import Latest iPhone Photo to copy one to <target>/iPhone/."
     @State private var targetFolder: URL?
     @State private var isWorking = false
+    @State private var deviceFileCount: Int = 0
+
+    // Re-subscribes automatically when `enumerator` reference changes (parent re-render).
+    private var fileCountPublisher: AnyPublisher<Int, Never> {
+        if let enumerator {
+            return enumerator.$totalCount.eraseToAnyPublisher()
+        }
+        return Just(0).eraseToAnyPublisher()
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -34,6 +44,22 @@ struct ContentView: View {
                     .lineLimit(1)
                     .truncationMode(.middle)
             }
+            // Device status indicator — reactive via fileCountPublisher
+            HStack(spacing: 6) {
+                if enumerator != nil {
+                    if deviceFileCount > 0 {
+                        Circle().fill(.green).frame(width: 8, height: 8)
+                        Text("iPhone ready — \(deviceFileCount) files")
+                    } else {
+                        Circle().fill(.yellow).frame(width: 8, height: 8)
+                        Text("iPhone connecting… (waiting for catalog)")
+                    }
+                } else {
+                    Circle().fill(.gray).frame(width: 8, height: 8)
+                    Text("No iPhone connected")
+                }
+            }
+            .font(.callout)
             ScrollView {
                 Text(output)
                     .font(.system(.body, design: .monospaced))
@@ -45,6 +71,9 @@ struct ContentView: View {
         }
         .padding()
         .frame(minWidth: 720, minHeight: 480)
+        .onReceive(fileCountPublisher) { count in
+            deviceFileCount = count
+        }
     }
 
     // Temporary verification UI for Phase 2/3. Replaced by FolderDropView and

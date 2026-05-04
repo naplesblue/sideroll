@@ -54,9 +54,9 @@ extension DeviceBrowser: ICDeviceBrowserDelegate {
         let name = device.name ?? "<unnamed>"
         print("[DeviceBrowser] Device removed: \(name)")
         Task { @MainActor in
-            if self.connectedDevice == device {
-                self.connectedDevice = nil
-            }
+            // Unconditionally clear — we only support one device at a time,
+            // and after USB disconnect the old object may not compare equal.
+            self.connectedDevice = nil
         }
     }
 }
