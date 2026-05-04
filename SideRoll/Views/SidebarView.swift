@@ -9,6 +9,7 @@ struct SidebarView: View {
     @Binding var targetFolder: URL?
     @Binding var cameraPhotos: [CameraPhoto]
     @Binding var buffer: TimeInterval
+    @Binding var subfolderName: String
     var timeWindow: TimeWindow?
 
     @Binding var onlyNewFiles: Bool
@@ -33,8 +34,8 @@ struct SidebarView: View {
                 sectionHeader("目标")
                 targetSection
 
-                // — 偏好
-                sectionHeader("偏好")
+                // — 选项
+                sectionHeader("选项")
                 preferencesSection
             }
             .padding(16)
@@ -116,18 +117,29 @@ struct SidebarView: View {
     private var targetSection: some View {
         Group {
             if let folder = targetFolder {
-                HStack(spacing: 6) {
-                    Image(systemName: "folder.badge.plus")
-                        .foregroundStyle(.secondary)
-                    Text("…/\(folder.lastPathComponent)/iPhone/")
-                        .font(.caption)
+                HStack(spacing: 0) {
+                    Text("…/\(folder.lastPathComponent)/")
+                        .font(.system(size: 12))
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
-                        .truncationMode(.head)
+                    TextField("子文件夹", text: $subfolderName)
+                        .font(.system(size: 12))
+                        .textFieldStyle(.plain)
+                        .frame(maxWidth: 80)
+                    Text("/")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
                 }
+                .padding(6)
+                .background(Color.white.opacity(0.05))
+                .cornerRadius(4)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 4)
+                        .stroke(Color.white.opacity(0.1), lineWidth: 1)
+                )
             } else {
                 Text("未选择")
-                    .font(.caption)
+                    .font(.system(size: 12))
                     .foregroundStyle(.secondary)
             }
         }
@@ -146,15 +158,16 @@ struct SidebarView: View {
 
     @ViewBuilder
     private func prefToggle(_ label: String, isOn: Binding<Bool>, dimmed: Bool = false) -> some View {
-        HStack(spacing: 8) {
+        HStack {
+            Text(label)
+                .font(.system(size: 13))
+                .foregroundStyle(dimmed && !isOn.wrappedValue ? .secondary : .primary)
+            Spacer()
             Toggle("", isOn: isOn)
                 .toggleStyle(.switch)
                 .labelsHidden()
                 .controlSize(.mini)
                 .tint(.amber)
-            Text(label)
-                .font(.system(size: 13))
-                .foregroundStyle(dimmed && !isOn.wrappedValue ? .secondary : .primary)
         }
     }
 
@@ -171,7 +184,8 @@ struct SidebarView: View {
         isScanning = true
         Task {
             do {
-                let photos = try await CameraFolderScanner.scan(folder: url)
+                let name = subfolderName.trimmingCharacters(in: .whitespaces).isEmpty ? "iPhone" : subfolderName
+                let photos = try await CameraFolderScanner.scan(folder: url, excludingSubfolders: [name])
                 cameraPhotos = photos
             } catch {
                 print("[SidebarView] Scan error: \(error)")
@@ -183,7 +197,7 @@ struct SidebarView: View {
 
     nonisolated private static let timeFmt: DateFormatter = {
         let f = DateFormatter()
-        f.dateFormat = "HH:mm"
+        f.dateFormat = "MM/dd HH:mm"
         return f
     }()
 

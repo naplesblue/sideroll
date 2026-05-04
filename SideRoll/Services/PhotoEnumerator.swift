@@ -16,6 +16,7 @@ final class PhotoEnumerator: NSObject, ObservableObject {
     private var hasScheduledReport = false
     private var hasReported = false
     private var pendingThumbnails: [ObjectIdentifier: CheckedContinuation<CGImage, Error>] = [:]
+    private var pendingMetadata: [ObjectIdentifier: CheckedContinuation<[AnyHashable: Any], Error>] = [:]
 
     init(device: ICCameraDevice) {
         self.device = device
@@ -48,7 +49,38 @@ final class PhotoEnumerator: NSObject, ObservableObject {
     enum PhotoEnumeratorError: Error {
         case thumbnailAlreadyPending
         case thumbnailNotAvailable
+        case metadataAlreadyPending
+        case metadataNotAvailable
     }
+
+    @MainActor
+    func requestMetadata(for item: ICCameraItem) async throws -> [AnyHashable: Any] {
+        try await withCheckedThrowingContinuation { cont in
+            let id = ObjectIdentifier(item)
+            if pendingMetadata[id] != nil {
+                cont.resume(throwing: PhotoEnumeratorError.metadataAlreadyPending)
+                return
+            }
+            pendingMetadata[id] = cont
+            item.requestMetadata()
+        }
+    }
+
+    /// Extract EXIF DateTimeOriginal from metadata dict returned by requestMetadata.
+    nonisolated static func exifCaptureDate(from metadata: [AnyHashable: Any]) -> Date? {
+        // ImageIO-style keys: "{Exif}" dict contains "DateTimeOriginal"
+        guard let exif = metadata["{Exif}"] as? [String: Any],
+              let dateStr = exif["DateTimeOriginal"] as? String else { return nil }
+        return exifDateFormatter.date(from: dateStr)
+    }
+
+    nonisolated private static let exifDateFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "yyyy:MM:dd HH:mm:ss"
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.timeZone = .current
+        return f
+    }()
 
     @MainActor
     private func scheduleReport() {
@@ -157,7 +189,19 @@ extension PhotoEnumerator: ICCameraDeviceDelegate {
         didReceiveMetadata metadata: [AnyHashable: Any]?,
         for item: ICCameraItem,
         error: (any Error)?
-    ) {}
+    ) {
+        let id = ObjectIdentifier(item)
+        Task { @MainActor in
+            guard let cont = self.pendingMetadata.removeValue(forKey: id) else { return }
+            if let error = error {
+                cont.resume(throwing: error)
+            } else if let metadata = metadata {
+                cont.resume(returning: metadata)
+            } else {
+                cont.resume(throwing: PhotoEnumeratorError.metadataNotAvailable)
+            }
+        }
+    }
 
     nonisolated func cameraDevice(_ camera: ICCameraDevice, didRenameItems items: [ICCameraItem]) {}
     nonisolated func cameraDeviceDidChangeCapability(_ camera: ICCameraDevice) {}

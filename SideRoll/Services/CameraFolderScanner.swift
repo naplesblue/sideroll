@@ -12,13 +12,13 @@ enum CameraFolderScanner {
         "nef", "cr2", "cr3", "arw", "raf", "dng", "orf", "rw2",
     ]
 
-    nonisolated static func scan(folder: URL) async throws -> [CameraPhoto] {
+    nonisolated static func scan(folder: URL, excludingSubfolders: [String] = ["iPhone"]) async throws -> [CameraPhoto] {
         try await Task.detached(priority: .userInitiated) {
-            try scanSync(folder: folder)
+            try scanSync(folder: folder, excludingSubfolders: excludingSubfolders)
         }.value
     }
 
-    nonisolated private static func scanSync(folder: URL) throws -> [CameraPhoto] {
+    nonisolated private static func scanSync(folder: URL, excludingSubfolders: [String]) throws -> [CameraPhoto] {
         let fm = FileManager.default
         guard let enumerator = fm.enumerator(
             at: folder,
@@ -33,6 +33,13 @@ enum CameraFolderScanner {
         var skipped = 0
 
         for case let url as URL in enumerator {
+            // Skip files inside excluded subdirectories (e.g. iPhone/ from previous imports)
+            let relative = url.path.replacingOccurrences(of: folder.path + "/", with: "")
+            let topDir = relative.components(separatedBy: "/").first ?? ""
+            if excludingSubfolders.contains(where: { $0.caseInsensitiveCompare(topDir) == .orderedSame }) {
+                continue
+            }
+
             let ext = url.pathExtension.lowercased()
             guard supportedExtensions.contains(ext) else { continue }
 

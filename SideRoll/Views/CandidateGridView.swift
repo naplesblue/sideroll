@@ -10,6 +10,7 @@ struct CandidateGridView: View {
     var candidates: [ICCameraFile]
     @Binding var selectedNames: Set<String>
     var enumerator: PhotoEnumerator?
+    var exifDates: [String: Date]
 
     private let columns = [GridItem(.adaptive(minimum: 110, maximum: 150))]
 
@@ -34,7 +35,8 @@ struct CandidateGridView: View {
                             CandidateTile(
                                 file: file,
                                 isSelected: selectedNames.contains(file.name ?? ""),
-                                enumerator: enumerator
+                                enumerator: enumerator,
+                                exifDates: exifDates
                             ) {
                                 toggleSelection(file)
                             }
@@ -61,6 +63,7 @@ struct CandidateTile: View {
     let file: ICCameraFile
     let isSelected: Bool
     var enumerator: PhotoEnumerator?
+    var exifDates: [String: Date]
     let onToggle: () -> Void
 
     @State private var thumbnail: NSImage?
@@ -122,7 +125,11 @@ struct CandidateTile: View {
 
             // Info row: time + format
             HStack {
-                if let date = file.creationDate {
+                let displayDate: Date? = {
+                    if let name = file.name, let d = exifDates[name] { return d }
+                    return file.creationDate
+                }()
+                if let date = displayDate {
                     Text(Self.timeFmt.string(from: date))
                         .font(.system(size: 10))
                         .foregroundStyle(.secondary)
@@ -152,7 +159,7 @@ struct CandidateTile: View {
 
     nonisolated private static let timeFmt: DateFormatter = {
         let f = DateFormatter()
-        f.dateFormat = "HH:mm"
+        f.dateFormat = "MM/dd HH:mm"
         return f
     }()
 }
