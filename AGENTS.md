@@ -66,7 +66,7 @@
 | Default Actor Isolation | `MainActor`（`SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor`，注意 ImageCaptureCore delegate 的 actor 隔离问题） |
 | 文件同步模式 | `PBXFileSystemSynchronizedRootGroup`（Xcode 自动同步源文件夹下所有内容，无需手动加 `.pbxproj` 引用） |
 
-### 仓库结构
+### 仓库结构（当前）
 
 ```
 SideRoll/
@@ -75,40 +75,31 @@ SideRoll/
 ├── SideRoll.xcodeproj/
 ├── SideRoll/                    ← 主 target 源代码（Xcode 自动同步）
 │   ├── SideRollApp.swift
-│   ├── ContentView.swift
-│   └── Assets.xcassets/
-├── SideRollTests/               ← 单元测试
-│   └── SideRollTests.swift
-└── SideRollUITests/             ← UI 测试（v1 暂不重点维护）
+│   ├── ContentView.swift        ← 主布局：HSplitView(sidebar + grid) + BottomBar
+│   ├── Models/
+│   │   └── CameraPhoto.swift
+│   ├── Services/
+│   │   ├── DeviceBrowser.swift
+│   │   ├── PhotoEnumerator.swift  ← 含 requestThumbnail / requestMetadata 续延
+│   │   ├── ThumbnailLoader.swift
+│   │   ├── CameraFolderScanner.swift  ← 含 excludingSubfolders 参数
+│   │   ├── TimeWindowResolver.swift
+│   │   ├── ImportEngine.swift
+│   │   └── LivePhotoPairing.swift
+│   ├── Views/
+│   │   ├── SidebarView.swift      ← 文件夹卡片 + 缓冲滑块 + 目标路径 + 选项
+│   │   ├── DeviceBar.swift         ← 顶部设备状态栏（电量 + 锁屏检测）
+│   │   ├── GridHeaderView.swift    ← 候选照片标题 + 全选/反选
+│   │   ├── CandidateGridView.swift ← LazyVGrid 缩略图网格
+│   │   ├── BottomBar.swift         ← 底部状态栏 + 开始传送按钮
+│   │   └── Theme.swift             ← 主题色定义（amber）
+│   ├── Assets.xcassets/
+│   └── SideRoll.entitlements
+├── SideRollTests/
+│   ├── SideRollTests.swift
+│   └── TimeWindowResolverTests.swift
+└── SideRollUITests/
     └── SideRollUITests.swift
-```
-
-### Phase 1 之后的目标结构
-
-```
-SideRoll/
-├── App/
-│   └── SideRollApp.swift
-├── Views/
-│   ├── ContentView.swift
-│   ├── FolderDropView.swift
-│   ├── DeviceStatusView.swift
-│   ├── CandidateGridView.swift
-│   └── ImportProgressView.swift
-├── Services/
-│   ├── CameraFolderScanner.swift
-│   ├── TimeWindowResolver.swift
-│   ├── DeviceBrowser.swift
-│   ├── PhotoEnumerator.swift
-│   ├── ThumbnailLoader.swift
-│   ├── ImportEngine.swift
-│   └── LivePhotoPairing.swift
-├── Models/
-│   ├── CameraPhoto.swift
-│   ├── PhonePhoto.swift
-│   └── ImportPlan.swift
-└── Resources/
-    └── SideRoll.entitlements
 ```
 
 ---
@@ -118,23 +109,25 @@ SideRoll/
 ### 数据流
 
 ```
-用户拖入相机文件夹
+用户选择相机文件夹（NSOpenPanel）
         ↓
-CameraFolderScanner（ImageIO 读 EXIF DateTimeOriginal）
+CameraFolderScanner（ImageIO 读 EXIF DateTimeOriginal，排除导入子文件夹）
         ↓
 TimeWindowResolver（首末张 ± buffer）→ Date 区间 [start, end]
         ↓
 DeviceBrowser（ICDeviceBrowser 发现 iPhone）
         ↓
-PhotoEnumerator（遍历 ICCameraDevice.mediaFiles，按 creationDate 过滤）
+PhotoEnumerator（遍历 ICCameraDevice.mediaFiles）
         ↓
-ThumbnailLoader（懒加载缩略图给 UI）
+fetchEXIFDates（requestMetadata → EXIF DateTimeOriginal，粗筛 ±24h 内逐个拉取）
+        ↓
+candidates 过滤（优先用 EXIF 日期，回退到 creationDate）
+        ↓
+ThumbnailLoader（懒加载缩略图给 UI，按需请求）
         ↓
 用户在 CandidateGridView 勾选/取消
         ↓
-ImportEngine（requestDownloadFile → 目标子文件夹）
-        ↓
-LivePhotoPairing（同 basename .HEIC + .MOV 一起下载）
+ImportEngine（requestDownloadFile → 用户可编辑的目标子文件夹）
 ```
 
 ### 关键 API 速记
@@ -144,33 +137,34 @@ LivePhotoPairing（同 basename .HEIC + .MOV 一起下载）
 | 设备发现 | `ICDeviceBrowser` + `ICDeviceBrowserDelegate.deviceBrowser(_:didAdd:moreComing:)` |
 | 过滤设备类型 | `browsedDeviceTypeMask = .camera` |
 | iPhone 文件列表 | `ICCameraDevice.mediaFiles: [ICCameraFile]`（含 `name` / `creationDate` / `fileSize` / `uti`） |
-| 缩略图（同步） | `ICCameraFile.thumbnailIfAvailable` |
-| 缩略图（异步） | `ICCameraFile.requestThumbnail(_:)` |
-| 下载 | `ICCameraDevice.requestDownloadFile(_:options:downloadDelegate:didDownloadSelector:contextInfo:)`，options 设 `ICDownloadsDirectoryURL` 和 `ICSaveAsFilename` |
+| 缩略图（异步） | `ICCameraFile.requestThumbnail()` → delegate `didReceiveThumbnail:for:error:` |
+| EXIF 元数据 | `ICCameraItem.requestMetadata()` → delegate `didReceiveMetadata:for:error:` → `{Exif}.DateTimeOriginal` |
+| 下载 | `ICCameraDevice.requestDownloadFile(_:options:downloadDelegate:didDownloadSelector:contextInfo:)`，options 用 `ICDownloadOption` 类型化 key |
 | 相机 EXIF | `ImageIO`：`CGImageSourceCreateWithURL` → `CGImageSourceCopyPropertiesAtIndex` → `kCGImagePropertyExifDictionary[kCGImagePropertyExifDateTimeOriginal]` |
+| 设备电量 | `ICDevice.batteryLevel` (Int, 0–100) |
 
-### Entitlements 需求
+### Entitlements — ✅ 已就位
 
-需要在 `SideRoll.entitlements` 中或通过 Xcode Capabilities 启用：
+`SideRoll/SideRoll.entitlements` 中已配置：
 
-- `com.apple.security.app-sandbox`（已开启）
-- `com.apple.security.device.usb`（**待添加**——ImageCaptureCore 访问 iPhone）
-- `com.apple.security.files.user-selected.read-write`（**待修改**——当前 `ENABLE_USER_SELECTED_FILES = readonly`，需改成 `readwrite` 才能写入相机文件夹）
-
-⚠️ 首次插 iPhone 会触发系统授权弹窗（"允许此 Mac 访问"），用户拒绝则 `mediaFiles` 一直为空，且**没有清晰的错误码**——这是 Phase 1 最大的卡点风险。
+- `com.apple.security.app-sandbox`
+- `com.apple.security.device.usb`（ImageCaptureCore 访问 iPhone）
+- `com.apple.security.files.user-selected.read-write`（写入相机文件夹）
 
 ### 边界情况清单
 
 | 情况 | 处理 |
 |---|---|
-| iPhone 锁屏 | `mediaFiles` 为空。UI 显式提示"请解锁 iPhone 并允许访问" |
-| HEIC 拍摄时间 | iPhone 端用 `ICCameraFile.creationDate` 直接拿，不需要解 EXIF |
+| iPhone 锁屏 | `isLocked` 状态追踪，DeviceBar 显示"请解锁 iPhone 屏幕"。拔插后重连需解锁才能重新枚举 |
+| iPhone 照片日期 | **优先用 EXIF `DateTimeOriginal`**（通过 `requestMetadata` 异步拉取），回退到 `creationDate`。`creationDate` 是文件系统日期，可能被编辑/同步改变 |
+| 相机文件夹递归扫描 | **排除导入目标子文件夹**（默认 `iPhone/`），防止已导入照片污染 TimeWindow |
 | 时区 | `Date` 是绝对时刻，相机/iPhone 时区不同也不影响。但用户的相机时区设错时窗口会偏（v2 再做平移 UI） |
-| 大量照片性能 | `mediaFiles` 在 iPhone 上可能上万。先用 `creationDate` 过滤，再按需拉缩略图（懒加载） |
+| 大量照片性能 | `mediaFiles` 在 iPhone 上可能上万。先用 `creationDate` 粗筛（±24h），对粗筛结果拉 EXIF 精确过滤，再按需拉缩略图（懒加载） |
 | 重复导入 | 目标已存在同名文件 → 跳过 + 标记 `.skipped`，**绝不覆盖** |
 | 单张下载失败 | 不中断批量，最后聚合 `[failed: [(file, error)]]` |
 | Live Photo .MOV 缺失 | 默认行为（iOS PTP 不暴露 Live Photo 配对视频），只导入 HEIC，不报错 |
 | 中途拔 iPhone | 剩余文件标记 failed，不 crash |
+| 导入完成 | 弹出 alert 对话框显示结果摘要（已传送/已跳过/失败数），需用户确认 |
 
 ---
 
@@ -513,88 +507,103 @@ enum TimeWindowResolver {
 
 ### Phase 4 · SwiftUI 串接
 
-#### T4.1 · ContentView 主布局 — `TODO`
+#### T4.1 · ContentView 主布局 — `DONE` (2026-05-04, commits `e0e9837`, `a252b82`)
 
-**文件**：`SideRoll/Views/ContentView.swift`
+**文件**：`SideRoll/ContentView.swift`
 
-**布局**：
+**布局**（参考 Nikon Transfer 2 + 用户设计图「现代克制」）：
 ```
-┌─────────────────────────────────────────────┐
-│ [Sidebar]      │  [Main]                    │
-│ - 相机文件夹    │  候选缩略图网格             │
-│   卡片 + drop  │  (LazyVGrid)               │
-│ - 设备状态     │                            │
-│ - 缓冲滑块     │                            │
-│ - 导入按钮     │  ─────────────────────────  │
-│                │  [Import Progress]         │
-└─────────────────────────────────────────────┘
+┌─ DeviceBar ────────────────────────────────────┐
+│ 📱 NaplesIP17Pro · 🟢就绪 · 1,714 张  🔋85%   │
+├────────────┬───────────────────────────────────┤
+│ SidebarView│  GridHeaderView                   │
+│ - 相机文件夹│  候选照片 35 · 已选 35  [全选][反选] │
+│   卡片     │  ────────────────────────────────  │
+│ - 缓冲滑块  │  CandidateGridView               │
+│ - 目标路径  │  (LazyVGrid, 缩略图懒加载)        │
+│   (可编辑)  │                                   │
+│ - 选项     │                                   │
+│   开关列表  │                                   │
+├────────────┴───────────────────────────────────┤
+│ BottomBar: 35 张准备就绪 · 约 177.5 MB [开始传送] │
+└────────────────────────────────────────────────┘
 ```
 
-**验收**：基本布局可见，无功能也行。
+**实现**：
+- `HSplitView` 左右分栏：Sidebar（200–260pt）+ Grid
+- `VStack(spacing: 0)` 垂直叠放 DeviceBar / Divider / HSplitView / Divider / BottomBar
+- 窗口最小 900×640
+
+**验收**：✅ 与设计图布局一致，Sidebar 固定在顶部不随内容滚动
 
 ---
 
-#### T4.2 · FolderDropView — `TODO`
+#### T4.2 · SidebarView（含文件夹选择 + 缓冲 + 目标 + 选项） — `DONE` (2026-05-04)
 
-**目标**：支持拖拽 + 浏览选相机文件夹，触发扫描和窗口计算。
+**文件**：`SideRoll/Views/SidebarView.swift`
 
-**实现要点**：
-- 用 `.onDrop(of: [.fileURL], ...)` + `NSOpenPanel`
-- 选定后调用 `CameraFolderScanner.scan()` → `TimeWindowResolver.resolve()`
-- 显示窗口 `[start, end]`、缓冲滑块（默认 2h，范围 0–12h）
-- 缓冲滑块变化 → 重算窗口 → 触发候选刷新
+**实现**：
+- **相机文件夹卡片**：显示文件夹名 + 文件数 + RAW 格式 + 时间范围，点击 "选择文件夹" 触发 `NSOpenPanel`
+- **缓冲滑块**：0–12h 范围，步进 30min，amber 主题色，实时显示 `±X.X 小时` 和缓冲后窗口范围（`MM/dd HH:mm` 格式）
+- **目标路径**：显示 `…/文件夹名/<子文件夹>/`，子文件夹名可编辑（TextField，默认 `iPhone`），12pt 字体
+- **选项区**：4 个 toggle（只传送新文件 / 传送完成后自动断开 / 保留原 EXIF 时间 / 完成后删除原文件），macOS 设置风格（文字在左，mini switch 靠右对齐）
+- **CameraFolderScanner 排除**：扫描时跳过用户设定的导入子文件夹名
 
-**验收**：
-- 拖一个真实相机文件夹进去，5 秒内显示窗口范围
-- 调整缓冲滑块，窗口实时更新
-
----
-
-#### T4.3 · DeviceStatusView — `TODO`
-
-**目标**：显示 iPhone 状态：未连接 / 已连接但锁屏 / 就绪。
-
-**实现要点**：
-- 监听 `DeviceBrowser` 的 `connectedDevice`
-- 三态：
-  - `nil` → 灰色 + "未连接 iPhone"
-  - 非 nil 但 `mediaFiles` 为 nil/空 → 黄色 + "请解锁 iPhone 并允许访问"
-  - 就绪 → 绿色 + 设备名
-- 就绪时自动触发 `PhotoEnumerator`
-
-**验收**：插拔 iPhone、锁屏/解锁状态切换，UI 正确反应。
+**验收**：✅ 布局与设计图一致，选项 toggle 与 macOS 设置风格匹配
 
 ---
 
-#### T4.4 · CandidateGridView — `TODO`
+#### T4.3 · DeviceBar（设备状态 + 电量 + 锁屏检测） — `DONE` (2026-05-04)
 
-**目标**：缩略图网格 + 时间标签 + 单张勾选。
+**文件**：`SideRoll/Views/DeviceBar.swift`
 
-**实现要点**：
-- `LazyVGrid` 列宽 ~120px
-- 每格：缩略图 + 拍摄时间 + 勾选框（默认全选）
-- 缩略图懒加载：用 `task(id:)` 或 `onAppear`，屏幕外不请求
-- 候选数量大（200+）时滚动应流畅
+**实现**：
+- 三态显示：未连接（灰色）/ 连接中 or 锁屏（amber "请解锁 iPhone 屏幕"）/ 就绪（绿色 + 文件数）
+- 电量显示：`ICDevice.batteryLevel` + 系统电池图标（`battery.0` ~ `battery.100.bolt`）
+- `PhotoEnumerator.isLocked` 状态追踪：通过 `cameraDeviceDidEnableAccessRestriction` / `didRemoveAccessRestriction` delegate 方法
 
-**验收**：
-- 200+ 候选下滚动流畅（无明显卡顿）
-- 缩略图陆续填充，未填充时显示占位
-- 勾选状态变化即时反映
+**验收**：✅ 插拔 iPhone / 锁屏解锁状态切换正常反映，电量实时显示
+
+**实战发现**：
+- 拔插 iPhone 后重新连接，必须先解锁才能重新枚举（`hasScheduledReport` 需要重置为 false，否则阻塞重新枚举）
+- `ICDevice.batteryLevel` 直接可用，无需额外权限
 
 ---
 
-#### T4.5 · ImportProgressView — `TODO`
+#### T4.4 · CandidateGridView（缩略图网格 + EXIF 日期过滤） — `DONE` (2026-05-04)
 
-**目标**：进度条 + 实时日志 + 完成后失败列表。
+**文件**：`SideRoll/Views/CandidateGridView.swift`、`SideRoll/Views/GridHeaderView.swift`
 
-**实现要点**：
-- `ProgressView(value:total:)` 显示 N / total
-- 完成后展示 `[(file, status)]`，failed 红色、skipped 灰色、success 绿色
-- 支持中途取消（设置 cancellation flag，下一张不再 download）
+**实现**：
+- `LazyVGrid` 自适应列宽（110–150px），4:3 宽高比
+- 缩略图懒加载：`.task(id: file.name)` 触发，屏幕外不请求
+- 每格：缩略图 + amber 勾选角标 + 时间标签（`MM/dd HH:mm`）+ 格式标签
+- GridHeaderView：标题 "候选照片"（15pt semibold）+ 计数（13pt）+ 全选/反选按钮（13pt）
+- **EXIF 日期解析**：`PhotoEnumerator.requestMetadata()` → `exifCaptureDate(from:)` 提取 `{Exif}.DateTimeOriginal`
+- **两阶段过滤**：先用 `creationDate` 粗筛（±24h），对粗筛结果拉 EXIF 精确过滤
+- `exifDates: [String: Date]` 字典存储已解析的 EXIF 日期，过滤和显示均优先使用
 
-**验收**：
-- 导入 50 张照片过程中 UI 不卡，进度实时更新
-- 取消按钮在 1 秒内停止后续下载
+**验收**：✅ 35 张候选照片正确过滤（排除了不同日期的干扰），缩略图懒加载流畅，勾选/取消/全选/反选均正常
+
+**实战发现（重要 bug 修复）**：
+- `ICCameraFile.creationDate` 是文件系统日期，**不是** EXIF 拍摄日期。被编辑、iCloud 同步、AirDrop 等操作会改变，导致不同日期的照片被错误纳入候选
+- `CameraFolderScanner` 递归遍历会扫到 `iPhone/` 子目录中之前导入的照片，把 TimeWindow 拉宽到跨越多天。修复：`excludingSubfolders` 参数跳过导入目标
+- `.onReceive(fileCountPublisher)` 因 computed property 每次 render 创建新 publisher 实例，导致 `autoSelectAll()` 覆盖用户手动选择。修复：只在 `deviceFileCount` 从 0→N 时触发
+
+---
+
+#### T4.5 · BottomBar + 导入流程 + 完成对话框 — `DONE` (2026-05-04)
+
+**文件**：`SideRoll/Views/BottomBar.swift`
+
+**实现**：
+- 底部栏：`X 张准备就绪 · 约 X.X MB` + amber "开始传送" 按钮
+- 导入中：进度条 + `[N/total] filename` 实时文本 + 取消按钮
+- 导入完成：弹出 `alert` 对话框，显示结果摘要（已传送 / 已跳过 / 失败），需用户点击 "完成" 确认
+- 取消：立即停止后续下载，对话框显示 "已取消" + 已传送/未处理数量
+- **目标子文件夹可编辑**：默认 `iPhone`，用户可在 sidebar 修改，为空时回退到 `iPhone`
+
+**验收**：✅ 导入 + 跳过 + 取消全流程正常，完成弹窗显示正确结果
 
 ---
 
@@ -699,36 +708,38 @@ enum TimeWindowResolver {
 | 1 · iPhone USB | ✅ 3/3 完成 |
 | 2 · 相机解析 | ✅ 4/4 完成 |
 | 3 · 导入引擎 | ✅ 4/4 完成 |
-| 4 · SwiftUI | 0/5 |
+| 4 · SwiftUI | ✅ 5/5 完成 |
 | 5 · 验收 | 0/3 |
 
 ### 下一步
 
-**第一个待做任务：T3.5 · importAll 粘合层**（参见 §5）——或直接进 Phase 4 UI
+**第一个待做任务：T5.1 · 真实旅行验收**
 
-⚠️ ImportEngine API 变更（2026-05-04 T3.3/T3.4）：
-- `download(file:to:)` 返回 `DownloadResult`（`.downloaded(URL)` / `.skipped(URL)`），不再直接返回 `URL`
-- 新增 `importBatch(files:to:) -> ImportReport`，三桶汇总（downloaded/skipped/failed）
-- ContentView 临时 UI 已改用 `importBatch`，Phase 4 正式 UI 应延续此 API
+App 核心功能已全部实现并真机验证通过。下一步是用完整旅行数据跑端到端验收，记录漏选/多选指标。
 
-⚠️ 重大决策修订（2026-05-04）：
-- Live Photo 动效保留已从 §2 移除（iOS PTP 系统限制）。详见 §5 T3.2 实战发现
-- 影响：T4.x UI 设计无需考虑 Live Photo 特殊呈现；T5.1 验收指标已删 Live Photo 配对率
+### 待还的技术债
 
-待还的技术债：
-- T1.3 验证 dump 缩略图代码嵌在 `PhotoEnumerator.reportFirstTen()` 末尾——Phase 4 实现 `CandidateGridView` 时迁出去
-- T2.2 验证 UI（`ContentView` 里的 Scan Folder 按钮 + 结果面板）是临时的，T4.2 `FolderDropView` 实施时替换
+- Sidebar 选项 toggle（只传送新文件 / 自动断开 / 保留 EXIF / 删除原文件）目前绑定到 `@State`，**尚未接入 ImportEngine 实际逻辑**。Phase 5 需要完成 wiring
 - `device(_:didReceiveStatusInformation:)` 的 dict key 类型 warning 仍在，留作 no-op，不影响功能
+- 性能：>1000 候选照片时的 EXIF metadata 批量请求可能较慢（当前顺序请求），可改为 TaskGroup 并发
+
+### 已清理的技术债（Phase 4 中解决）
+
+- ✅ T1.3 验证 dump 缩略图代码已从 `PhotoEnumerator.reportFirstTen()` 移除
+- ✅ ContentView 临时 UI（Scan Folder 按钮 + 结果面板）已被正式 SidebarView + CandidateGridView 替换
+- ✅ `ICCameraFile.creationDate` 不可靠问题已通过 EXIF `DateTimeOriginal` 二次验证解决
+- ✅ CameraFolderScanner 递归扫描污染 TimeWindow 已通过 `excludingSubfolders` 解决
 
 ### 已知问题 / 开放问题
 
-- 暂无。
+- EXIF metadata 字典的 key 结构（`{Exif}.DateTimeOriginal`）基于 ImageIO 标准格式，在 macOS 26 上实测可用。如未来 iOS/macOS 版本改变 PTP metadata 格式需要关注
+- 首次运行时系统可能弹出"图像捕捉"权限弹窗，需用户在系统设置中批准
 
 ### 接手 checklist
 
 1. 读完 §1–§4 + §8（本节）
 2. 跑 `xcodebuild -scheme SideRoll build` 确认当前能 build
-3. 找到第一个 `TODO` 任务（T0.2），把它标 `IN_PROGRESS`
+3. 找到第一个 `TODO` 任务（T5.1），把它标 `IN_PROGRESS`
 4. 完成后标 `DONE` + 日期 + commit hash（如已 git）
 5. 更新 §8 整体进度表
 
@@ -745,4 +756,4 @@ enum TimeWindowResolver {
 
 ---
 
-**最后更新**：2026-05-04 by Claude Opus 4.6 (Thinking)
+**最后更新**：2026-05-04 by Antigravity (Phase 4 完成)
