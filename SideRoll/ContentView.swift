@@ -76,31 +76,58 @@ struct ContentView: View {
             output = "Pick a target folder first."
             return
         }
-        guard let enumerator,
-              let latest = enumerator.availableFiles.last else {
-            output = "iPhone not ready or no files yet. Wait for 'Device became ready (complete content catalog)' in console."
+        guard let enumerator else {
+            output = "iPhone not ready. Wait for 'Device became ready (complete content catalog)' in console."
             return
         }
+        let all = enumerator.availableFiles
+        // Find latest IMAGE (skip standalone videos when picking "latest"); if
+        // it is a Live Photo we'll also pull the .MOV companion.
+        guard let latestImage = all.reversed().first(where: { f in
+            let ext = ((f.name ?? "") as NSString).pathExtension.lowercased()
+            return LivePhotoPairing.imageExtensions.contains(ext)
+        }) else {
+            output = "No image files found in iPhone catalog."
+            return
+        }
+        let toImport = LivePhotoPairing.filesToImport(for: latestImage, in: all)
         let engine = ImportEngine(device: enumerator.device)
         let iphoneFolder = target.appendingPathComponent("iPhone", isDirectory: true)
 
         isWorking = true
-        output = "Importing \(latest.name ?? "?") → \(iphoneFolder.path)…"
+        let names = toImport.compactMap { $0.name }.joined(separator: " + ")
+        output = "Importing \(names) → \(iphoneFolder.path)…"
         let start = Date()
         Task {
+            var lines: [String] = []
             do {
-                let url = try await engine.download(file: latest, to: iphoneFolder)
+                for file in toImport {
+                    let url = try await engine.download(file: file, to: iphoneFolder)
+                    let attrs = try? FileManager.default.attributesOfItem(atPath: url.path)
+                    let size = (attrs?[.size] as? Int) ?? 0
+                    lines.append("  \(file.name ?? "?") → \(url.lastPathComponent) (\(size) bytes, source \(file.fileSize))")
+                }
                 let elapsed = Date().timeIntervalSince(start)
-                let attrs = try? FileManager.default.attributesOfItem(atPath: url.path)
-                let size = (attrs?[.size] as? Int) ?? 0
-                output = """
-                Imported in \(String(format: "%.2f", elapsed))s
-                  Saved to: \(url.path)
-                  Size on disk: \(size) bytes
-                  Source on device: \(latest.name ?? "?") (\(latest.fileSize) bytes)
-                """
+                let pairing = toImport.count > 1 ? " (Live Photo pair)" : ""
+                let allPairs = LivePhotoPairing.allPairs(in: all)
+
+                // Diagnostic: extension breakdown
+                var extCounts: [String: Int] = [:]
+                for f in all {
+                    let ext = ((f.name ?? "") as NSString).pathExtension.lowercased()
+                    extCounts[ext.isEmpty ? "(no ext)" : ext, default: 0] += 1
+                }
+                let extReport = extCounts
+                    .sorted { $0.value > $1.value }
+                    .map { "\($0.key): \($0.value)" }
+                    .joined(separator: ", ")
+
+                let summary = "Imported \(toImport.count) file\(toImport.count > 1 ? "s" : "") in \(String(format: "%.2f", elapsed))s\(pairing)"
+                let folder = "  Folder: \(iphoneFolder.path)"
+                let stats = "Catalog stats: \(allPairs.count) Live Photo pair(s) detected across \(all.count) total iPhone items.\nBy extension: \(extReport)"
+                output = summary + "\n" + lines.joined(separator: "\n") + "\n" + folder + "\n\n" + stats
             } catch {
-                output = "Import failed: \(error)"
+                output = "Import failed: \(error)\n\nPartial progress:\n" + lines.joined(separator: "\n")
             }
             isWorking = false
         }

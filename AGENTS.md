@@ -37,7 +37,7 @@
 | iPhone 读取 | USB 直连 + `ImageCaptureCore` | 不依赖 iCloud 同步状态，确保拿到原图 |
 | 时间窗口 | 相机首末张 ± 可配置缓冲（默认 ±2 小时） | 简单稳健，覆盖出门到回家 |
 | HEIC 格式 | **保留原格式，不转 JPG** | LR/C1 都已支持 HEIC，转 JPG 损失元信息 |
-| Live Photo | **连同 .MOV 一起复制** | 保留完整动效 |
+| Live Photo | **静帧 .HEIC 导入，动效 .MOV 不可得** | iOS PTP 不暴露 Live Photo 配对 .MOV（2026-05-04 用 macOS 自带"图像捕捉"App 在 iPhone 17 Pro 上反向验证：连 Apple 自己的工具都只能看到 HEIC）。坚持 USB 直连方案的代价。用户原话"后期编辑多数是 DNG，少数是 HEIC，MOV 现在没需求"——可接受 |
 | 文件命名 | **保留 iPhone 原文件名** | 不加时间戳前缀 |
 | 导入前预览 | **必须有，强制确认** | 避免误导入大量非旅行照片 |
 | 主力 RAW 格式 | Nikon NEF | 用户主力相机品牌 |
@@ -49,6 +49,7 @@
 - 时间戳前缀重命名
 - 多设备并行（一次只服务一台 iPhone）
 - 自动检测时区错误并平移窗口（v1 用 ±缓冲足够）
+- **Live Photo 动效保留**（iOS PTP 系统限制，2026-05-04 实测确认）
 
 ---
 
@@ -168,7 +169,7 @@ LivePhotoPairing（同 basename .HEIC + .MOV 一起下载）
 | 大量照片性能 | `mediaFiles` 在 iPhone 上可能上万。先用 `creationDate` 过滤，再按需拉缩略图（懒加载） |
 | 重复导入 | 目标已存在同名文件 → 跳过 + 标记 `.skipped`，**绝不覆盖** |
 | 单张下载失败 | 不中断批量，最后聚合 `[failed: [(file, error)]]` |
-| 只有 .HEIC 没 .MOV | 不当错误，正常导入主图 |
+| Live Photo .MOV 缺失 | 默认行为（iOS PTP 不暴露 Live Photo 配对视频），只导入 HEIC，不报错 |
 | 中途拔 iPhone | 剩余文件标记 failed，不 crash |
 
 ---
@@ -452,20 +453,26 @@ enum TimeWindowResolver {
 
 ---
 
-#### T3.2 · LivePhotoPairing — `TODO`
+#### T3.2 · LivePhotoPairing — `DONE` (2026-05-04)
 
-**目标**：识别同 basename 的 `.HEIC` + `.MOV`，导入时一起拷。
+**目标（修订）**：识别同 basename 的 `image + video` 配对（`.HEIC/.JPG` + `.MOV/.MP4`），导入时一起拷。**Live Photo 动效保留实际不可达**——见 §2 决策修订。
 
 **文件**：`SideRoll/Services/LivePhotoPairing.swift`
 
-**实现要点**：
-- 给定 `[ICCameraFile]`，按 basename（去扩展名）分组
-- 一组里同时有 `.HEIC` 和 `.MOV` 即视为 Live Photo
-- 用户选了 .HEIC → 自动把对应 .MOV 加入下载队列（不在 UI 上额外显示，作为隐含行为）
+**实现**：
+- `videoCompanion(of:in:)` 按 basename 找视频配对
+- `filesToImport(for:in:)` 返回应同时下载的文件集（[image] 或 [image, video]）
+- `allPairs(in:)` O(N) basename 分组，给诊断/批量计划用
 
-**验收**：
-- 拷一张 Live Photo 后，目标目录下 `IMG_xxxx.HEIC` 与 `IMG_xxxx.MOV` 都在
-- 文件名 basename 一致
+**验收结果**：
+- ✅ pairing 逻辑代码正确：在用户 1714 项库中检测到 2 对 image+video（推断为偶然同 basename 的独立视频，非 Live Photo 配对）
+- ✅ 扩展名分布：jpg 840 / heic 660 / dng 99 / png 41 / jpeg 34 / mov 34 / mp4 5 / gif 1
+- ❌ Live Photo 动效保留：**不可能**——iOS PTP 不暴露 Live Photo 配对 .MOV，macOS 自带"图像捕捉"App 同样看不到，是 iOS 系统层限制
+
+**实战发现**（重要约束）：
+- iOS 把 Live Photo 主图 + 动效视频作为同一 PHAsset 存储，PTP/MTP 协议层只暴露主图
+- 想要拿到 Live Photo 动效，唯一路径是 PhotoKit + Photos library 权限，与本项目"USB 直连，不依赖 iCloud 同步状态"决策矛盾。**v1 不做，记入 §2 排除项**
+- 留下的 pairing 代码不是死码：用户如果用其他方式（如手动）让 iPhone 上同名 image+video 共存，仍会被识别为一组导入
 
 ---
 
@@ -593,9 +600,10 @@ enum TimeWindowResolver {
 **记录指标**：
 - 漏选数（应该被选中但没出现在候选里的）
 - 多选数（不该选中但出现的）
-- Live Photo 配对正确率
 - HEIC EXIF 拍摄时间一致性
 - 总耗时（vs 手工流程）
+
+注：原计划的"Live Photo 配对正确率"指标已移除——iOS PTP 不暴露 Live Photo 配对视频（详见 §2 / T3.2）
 
 **验收**：完成报告，记录数据。
 
@@ -683,17 +691,22 @@ enum TimeWindowResolver {
 | 0 · 脚手架 | ✅ 3/3 完成 |
 | 1 · iPhone USB | ✅ 3/3 完成 |
 | 2 · 相机解析 | ✅ 4/4 完成 |
-| 3 · 导入引擎 | 1/4（T3.1 done） |
+| 3 · 导入引擎 | 2/4（T3.1、T3.2 done） |
 | 4 · SwiftUI | 0/5 |
 | 5 · 验收 | 0/3 |
 
 ### 下一步
 
-**第一个待做任务：T3.2 · LivePhotoPairing**（参见 §5）
+**第一个待做任务：T3.3 · 幂等（已存在跳过）**（参见 §5）
 
-⚠️ T3.2 提醒：
-- iPhone 上 Live Photo 的 .HEIC 主图 + .MOV 视频是同 basename 不同 ext 的两个文件，都通过 ICCameraDevice.mediaFiles 列出——通过 `extension` 而非 `uti` 判断（iPhone 的 uti 都是泛化的 `public.image`）
-- 配对单位是"basename"，配对失败（只有 .HEIC 没 .MOV，或反之）不是错误，正常导入
+⚠️ T3.3 提醒：
+- 在 `ImportEngine.download(file:to:)` 入口检查 `FileManager.default.fileExists(atPath: targetURL.path)`
+- 已存在 → 不调用 `requestDownloadFile`，直接 resume continuation 返回 `.skipped` 状态而不是 success URL
+- 需要把 `download` 的返回类型改成枚举（如 `enum ImportOutcome { case downloaded(URL); case skipped(URL) }`），让上层能区分
+
+⚠️ 重大决策修订（2026-05-04）：
+- Live Photo 动效保留已从 §2 移除（iOS PTP 系统限制）。详见 §5 T3.2 实战发现
+- 影响：T4.x UI 设计无需考虑 Live Photo 特殊呈现；T5.1 验收指标已删 Live Photo 配对率
 
 待还的技术债：
 - T1.3 验证 dump 缩略图代码嵌在 `PhotoEnumerator.reportFirstTen()` 末尾——Phase 4 实现 `CandidateGridView` 时迁出去
