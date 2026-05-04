@@ -485,9 +485,9 @@ enum TimeWindowResolver {
 - 在发起 `requestDownloadFile` 之前检查 `FileManager.default.fileExists(atPath: targetURL.path)`
 - 已存在 → 直接返回 `.skipped(targetURL)`，不调用 download，不触发 continuation
 
-**验收**：
-- ✅ `xcodebuild build` SUCCEEDED
-- ⏳ 连续运行两次完整导入验收待 iPhone 真机测试（T5.1），逻辑路径已在 ContentView 临时 UI 中可见
+**验收结果**（NaplesIP17Pro 真机）：
+- ✅ `IMG_2523.HEIC` 在 T3.1 已导入过 → 再次点击 Import 正确返回 `0 downloaded, 1 skipped, 0 failed` (0.01s)
+- ✅ 显示 `⏭ IMG_2523.HEIC — already exists at IMG_2523.HEIC`，未触发下载
 
 ---
 
@@ -500,9 +500,14 @@ enum TimeWindowResolver {
 - 新增 `importBatch(files:to:) -> ImportReport`：逐文件 `do/catch` 调用 `download()`，失败记入 `failed` 不中断循环
 - ContentView 临时 UI 改用 `importBatch` 替代手动 for 循环，输出带 ✅/⏭/❌ 图标区分三种状态
 
-**验收**：
-- ✅ `xcodebuild build` SUCCEEDED + 7 个单元测试全绿
-- ⏳ 拔线场景不 crash 验收待 iPhone 真机测试（T5.1）
+**验收结果**（NaplesIP17Pro 真机，拔线测试）：
+- ✅ 批量 10 张导入中途拔 iPhone → `2 downloaded, 0 skipped, 8 failed`（27.62s）
+- ✅ 8 张失败全部正确报告 `ImageCaptureCore error -9958`，无遗漏
+- ✅ App 不 crash，UI 正常显示完整结果
+
+**实战发现**：
+- 拔线后 ImageCaptureCore 回调返回 error code `-9958`（设备断开），continuation 正常 resume throwing
+- 发现附带问题：拔线后重新插入 iPhone，`DeviceBrowser` 不能重新更新设备状态——需修复 `didRemove` 中的设备比较逻辑
 
 ---
 

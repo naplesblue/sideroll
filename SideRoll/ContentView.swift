@@ -21,6 +21,8 @@ struct ContentView: View {
                     .disabled(isWorking)
                 Button("Import Latest iPhone Photo") { importLatest() }
                     .disabled(isWorking || targetFolder == nil)
+                Button("Batch 10 (T3.4 Test)") { importBatchTest() }
+                    .disabled(isWorking || targetFolder == nil)
                 if isWorking {
                     ProgressView().controlSize(.small)
                 }
@@ -133,6 +135,81 @@ struct ContentView: View {
             let folder = "  Folder: \(iphoneFolder.path)"
             let stats = "Catalog stats: \(allPairs.count) Live Photo pair(s) detected across \(all.count) total iPhone items.\nBy extension: \(extReport)"
             output = summary + "\n" + lines.joined(separator: "\n") + "\n" + folder + "\n\n" + stats
+            isWorking = false
+        }
+    }
+
+    // T3.4 verification: import latest 10 images to test disconnect resilience.
+    // Remove after Phase 4.
+    private func importBatchTest() {
+        guard let target = targetFolder else {
+            output = "Pick a target folder first."
+            return
+        }
+        guard let enumerator else {
+            output = "iPhone not ready."
+            return
+        }
+        let all = enumerator.availableFiles
+        // Grab the latest 10 images
+        let images = all.reversed().filter { f in
+            let ext = ((f.name ?? "") as NSString).pathExtension.lowercased()
+            return LivePhotoPairing.imageExtensions.contains(ext)
+        }.prefix(10)
+        guard !images.isEmpty else {
+            output = "No images found."
+            return
+        }
+        let toImport = Array(images)
+        let engine = ImportEngine(device: enumerator.device)
+        let iphoneFolder = target.appendingPathComponent("iPhone", isDirectory: true)
+
+        isWorking = true
+        output = "Importing \(toImport.count) files with 3s delay each… UNPLUG iPhone to test failure handling."
+        let start = Date()
+        Task {
+            var downloaded: [(String, Int)] = []
+            var skipped: [String] = []
+            var failed: [(String, String)] = []
+
+            for (i, file) in toImport.enumerated() {
+                let name = file.name ?? "?"
+                output = "[\(i + 1)/\(toImport.count)] Downloading \(name)… UNPLUG NOW!"
+
+                do {
+                    let result = try await engine.download(file: file, to: iphoneFolder)
+                    switch result {
+                    case .downloaded(let url):
+                        let attrs = try? FileManager.default.attributesOfItem(atPath: url.path)
+                        let size = (attrs?[.size] as? Int) ?? 0
+                        downloaded.append((name, size))
+                    case .skipped:
+                        skipped.append(name)
+                    }
+                } catch {
+                    failed.append((name, error.localizedDescription))
+                }
+
+                // 3s pause between files so user can physically unplug
+                if i < toImport.count - 1 {
+                    try? await Task.sleep(for: .seconds(3))
+                }
+            }
+
+            let elapsed = Date().timeIntervalSince(start)
+            var lines: [String] = []
+            for (name, size) in downloaded {
+                lines.append("  ✅ \(name) (\(size) bytes)")
+            }
+            for name in skipped {
+                lines.append("  ⏭ \(name) — skipped")
+            }
+            for (name, err) in failed {
+                lines.append("  ❌ \(name) — \(err)")
+            }
+
+            let summary = "Result: \(downloaded.count) downloaded, \(skipped.count) skipped, \(failed.count) failed — \(String(format: "%.2f", elapsed))s"
+            output = summary + "\n" + lines.joined(separator: "\n")
             isWorking = false
         }
     }
