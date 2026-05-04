@@ -9,7 +9,8 @@ import ImageCaptureCore
 
 final class PhotoEnumerator: NSObject, ObservableObject {
     @Published private(set) var totalCount: Int = 0
-    @Published private(set) var availableFiles: [ICCameraFile] = []  // sorted by captureDate ASC
+    @Published private(set) var availableFiles: [ICCameraFile] = []
+    @Published private(set) var isLocked: Bool = true  // assume locked until catalog arrives
 
     let device: ICCameraDevice
     private var hasScheduledReport = false
@@ -62,44 +63,24 @@ final class PhotoEnumerator: NSObject, ObservableObject {
     @MainActor
     private func reportFirstTen() {
         guard !hasReported else { return }
-        hasReported = true
 
         let items = device.mediaFiles ?? []
         let files = items.compactMap { $0 as? ICCameraFile }
         guard !files.isEmpty else {
-            print("[PhotoEnumerator] No media files found after enumeration")
+            print("[PhotoEnumerator] No media files yet — will retry after unlock")
+            hasScheduledReport = false  // allow reschedule when files arrive
             return
         }
 
+        hasReported = true
         totalCount = files.count
 
         let sorted = files.sorted {
             ($0.creationDate ?? .distantPast) < ($1.creationDate ?? .distantPast)
         }
         availableFiles = sorted
-        print("[PhotoEnumerator] First 10 by creationDate (out of \(files.count) total):")
-        let formatter = ISO8601DateFormatter()
-        for f in sorted.prefix(10) {
-            let name = f.name ?? "<unnamed>"
-            let date = f.creationDate.map { formatter.string(from: $0) } ?? "<no date>"
-            let size = f.fileSize
-            let uti = f.uti ?? "<unknown>"
-            print("  \(name) | \(date) | \(size) bytes | \(uti)")
-        }
-
-        // T1.3 verification: dump thumbnail of first file. Remove or relocate
-        // to UI layer in Phase 4.
-        if let first = sorted.first {
-            Task {
-                do {
-                    let nsImage = try await ThumbnailLoader.loadThumbnail(for: first, via: self)
-                    let url = try ThumbnailLoader.dumpJPEG(nsImage)
-                    print("[ThumbnailLoader] Saved thumbnail (\(Int(nsImage.size.width))x\(Int(nsImage.size.height))) → \(url.path)")
-                } catch {
-                    print("[ThumbnailLoader] Failed: \(error)")
-                }
-            }
-        }
+        isLocked = false
+        print("[PhotoEnumerator] Catalog ready: \(files.count) files")
     }
 }
 
@@ -183,10 +164,16 @@ extension PhotoEnumerator: ICCameraDeviceDelegate {
     nonisolated func cameraDevice(_ camera: ICCameraDevice, didReceivePTPEvent eventData: Data) {}
 
     nonisolated func cameraDeviceDidEnableAccessRestriction(_ device: ICDevice) {
-        print("[PhotoEnumerator] Access restriction enabled — iPhone may be locked")
+        print("[PhotoEnumerator] Access restriction enabled — iPhone locked")
+        Task { @MainActor in
+            self.isLocked = true
+        }
     }
 
     nonisolated func cameraDeviceDidRemoveAccessRestriction(_ device: ICDevice) {
-        print("[PhotoEnumerator] Access restriction removed")
+        print("[PhotoEnumerator] Access restriction removed — iPhone unlocked")
+        Task { @MainActor in
+            self.isLocked = false
+        }
     }
 }
