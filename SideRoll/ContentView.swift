@@ -99,36 +99,40 @@ struct ContentView: View {
         output = "Importing \(names) → \(iphoneFolder.path)…"
         let start = Date()
         Task {
+            let report = await engine.importBatch(files: toImport, to: iphoneFolder)
+            let elapsed = Date().timeIntervalSince(start)
+
             var lines: [String] = []
-            do {
-                for file in toImport {
-                    let url = try await engine.download(file: file, to: iphoneFolder)
-                    let attrs = try? FileManager.default.attributesOfItem(atPath: url.path)
-                    let size = (attrs?[.size] as? Int) ?? 0
-                    lines.append("  \(file.name ?? "?") → \(url.lastPathComponent) (\(size) bytes, source \(file.fileSize))")
-                }
-                let elapsed = Date().timeIntervalSince(start)
-                let pairing = toImport.count > 1 ? " (Live Photo pair)" : ""
-                let allPairs = LivePhotoPairing.allPairs(in: all)
-
-                // Diagnostic: extension breakdown
-                var extCounts: [String: Int] = [:]
-                for f in all {
-                    let ext = ((f.name ?? "") as NSString).pathExtension.lowercased()
-                    extCounts[ext.isEmpty ? "(no ext)" : ext, default: 0] += 1
-                }
-                let extReport = extCounts
-                    .sorted { $0.value > $1.value }
-                    .map { "\($0.key): \($0.value)" }
-                    .joined(separator: ", ")
-
-                let summary = "Imported \(toImport.count) file\(toImport.count > 1 ? "s" : "") in \(String(format: "%.2f", elapsed))s\(pairing)"
-                let folder = "  Folder: \(iphoneFolder.path)"
-                let stats = "Catalog stats: \(allPairs.count) Live Photo pair(s) detected across \(all.count) total iPhone items.\nBy extension: \(extReport)"
-                output = summary + "\n" + lines.joined(separator: "\n") + "\n" + folder + "\n\n" + stats
-            } catch {
-                output = "Import failed: \(error)\n\nPartial progress:\n" + lines.joined(separator: "\n")
+            for (file, url) in report.downloaded {
+                let attrs = try? FileManager.default.attributesOfItem(atPath: url.path)
+                let size = (attrs?[.size] as? Int) ?? 0
+                lines.append("  ✅ \(file.name ?? "?") → \(url.lastPathComponent) (\(size) bytes, source \(file.fileSize))")
             }
+            for (file, url) in report.skipped {
+                lines.append("  ⏭ \(file.name ?? "?") — already exists at \(url.lastPathComponent)")
+            }
+            for (file, error) in report.failed {
+                lines.append("  ❌ \(file.name ?? "?") — \(error.localizedDescription)")
+            }
+
+            let pairing = toImport.count > 1 ? " (Live Photo pair)" : ""
+            let allPairs = LivePhotoPairing.allPairs(in: all)
+
+            // Diagnostic: extension breakdown
+            var extCounts: [String: Int] = [:]
+            for f in all {
+                let ext = ((f.name ?? "") as NSString).pathExtension.lowercased()
+                extCounts[ext.isEmpty ? "(no ext)" : ext, default: 0] += 1
+            }
+            let extReport = extCounts
+                .sorted { $0.value > $1.value }
+                .map { "\($0.key): \($0.value)" }
+                .joined(separator: ", ")
+
+            let summary = "Result: \(report.downloaded.count) downloaded, \(report.skipped.count) skipped, \(report.failed.count) failed — \(String(format: "%.2f", elapsed))s\(pairing)"
+            let folder = "  Folder: \(iphoneFolder.path)"
+            let stats = "Catalog stats: \(allPairs.count) Live Photo pair(s) detected across \(all.count) total iPhone items.\nBy extension: \(extReport)"
+            output = summary + "\n" + lines.joined(separator: "\n") + "\n" + folder + "\n\n" + stats
             isWorking = false
         }
     }

@@ -476,31 +476,33 @@ enum TimeWindowResolver {
 
 ---
 
-#### T3.3 · 幂等 — `TODO`
+#### T3.3 · 幂等 — `DONE` (2026-05-04)
 
 **目标**：目标已存在同名文件 → 跳过，不覆盖。
 
-**实现要点**：
-- 在 `ImportEngine` 入口处检查 `FileManager.default.fileExists(atPath:)`
-- 已存在 → 加入 `skipped: [URL]` 列表，不调用 download
+**实现**：
+- `download(file:to:)` 返回类型从 `URL` 改为 `DownloadResult` 枚举（`.downloaded(URL)` / `.skipped(URL)`）
+- 在发起 `requestDownloadFile` 之前检查 `FileManager.default.fileExists(atPath: targetURL.path)`
+- 已存在 → 直接返回 `.skipped(targetURL)`，不调用 download，不触发 continuation
 
 **验收**：
-- 连续运行两次完整导入，第二次报告全部 `skipped`，目标目录文件 mtime 与第一次相同（未被覆盖）
+- ✅ `xcodebuild build` SUCCEEDED
+- ⏳ 连续运行两次完整导入验收待 iPhone 真机测试（T5.1），逻辑路径已在 ContentView 临时 UI 中可见
 
 ---
 
-#### T3.4 · 失败收集 — `TODO`
+#### T3.4 · 失败收集 — `DONE` (2026-05-04)
 
 **目标**：单张失败不中断批量，最后给完整失败列表。
 
-**实现要点**：
-- 维护 `var results: [(file: ICCameraFile, status: ImportStatus)]`
-- `ImportStatus` 枚举：`success(URL)` / `skipped` / `failed(Error)`
-- 模拟测试：导入中途拔 iPhone，剩余文件标 failed 不 crash
+**实现**：
+- 新增 `ImportReport` 结构体：`downloaded: [(file, url)]` / `skipped: [(file, url)]` / `failed: [(file, error)]` 三桶
+- 新增 `importBatch(files:to:) -> ImportReport`：逐文件 `do/catch` 调用 `download()`，失败记入 `failed` 不中断循环
+- ContentView 临时 UI 改用 `importBatch` 替代手动 for 循环，输出带 ✅/⏭/❌ 图标区分三种状态
 
 **验收**：
-- 拔线场景下 App 不 crash
-- UI 上显示失败列表（在 T4.5 实现）
+- ✅ `xcodebuild build` SUCCEEDED + 7 个单元测试全绿
+- ⏳ 拔线场景不 crash 验收待 iPhone 真机测试（T5.1）
 
 ---
 
@@ -691,18 +693,18 @@ enum TimeWindowResolver {
 | 0 · 脚手架 | ✅ 3/3 完成 |
 | 1 · iPhone USB | ✅ 3/3 完成 |
 | 2 · 相机解析 | ✅ 4/4 完成 |
-| 3 · 导入引擎 | 2/4（T3.1、T3.2 done） |
+| 3 · 导入引擎 | ✅ 4/4 完成 |
 | 4 · SwiftUI | 0/5 |
 | 5 · 验收 | 0/3 |
 
 ### 下一步
 
-**第一个待做任务：T3.3 · 幂等（已存在跳过）**（参见 §5）
+**第一个待做任务：T3.5 · importAll 粘合层**（参见 §5）——或直接进 Phase 4 UI
 
-⚠️ T3.3 提醒：
-- 在 `ImportEngine.download(file:to:)` 入口检查 `FileManager.default.fileExists(atPath: targetURL.path)`
-- 已存在 → 不调用 `requestDownloadFile`，直接 resume continuation 返回 `.skipped` 状态而不是 success URL
-- 需要把 `download` 的返回类型改成枚举（如 `enum ImportOutcome { case downloaded(URL); case skipped(URL) }`），让上层能区分
+⚠️ ImportEngine API 变更（2026-05-04 T3.3/T3.4）：
+- `download(file:to:)` 返回 `DownloadResult`（`.downloaded(URL)` / `.skipped(URL)`），不再直接返回 `URL`
+- 新增 `importBatch(files:to:) -> ImportReport`，三桶汇总（downloaded/skipped/failed）
+- ContentView 临时 UI 已改用 `importBatch`，Phase 4 正式 UI 应延续此 API
 
 ⚠️ 重大决策修订（2026-05-04）：
 - Live Photo 动效保留已从 §2 移除（iOS PTP 系统限制）。详见 §5 T3.2 实战发现
@@ -738,4 +740,4 @@ enum TimeWindowResolver {
 
 ---
 
-**最后更新**：2026-05-03 by Claude Opus 4.7
+**最后更新**：2026-05-04 by Claude Opus 4.6 (Thinking)
