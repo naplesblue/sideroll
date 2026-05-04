@@ -13,6 +13,7 @@ final class PhotoEnumerator: NSObject, ObservableObject {
     private let device: ICCameraDevice
     private var hasScheduledReport = false
     private var hasReported = false
+    private var pendingThumbnails: [ObjectIdentifier: CheckedContinuation<CGImage, Error>] = [:]
 
     init(device: ICCameraDevice) {
         self.device = device
@@ -27,6 +28,24 @@ final class PhotoEnumerator: NSObject, ObservableObject {
 
     func stop() {
         device.requestCloseSession()
+    }
+
+    @MainActor
+    func requestThumbnail(for item: ICCameraItem) async throws -> CGImage {
+        try await withCheckedThrowingContinuation { cont in
+            let id = ObjectIdentifier(item)
+            if pendingThumbnails[id] != nil {
+                cont.resume(throwing: PhotoEnumeratorError.thumbnailAlreadyPending)
+                return
+            }
+            pendingThumbnails[id] = cont
+            item.requestThumbnail()
+        }
+    }
+
+    enum PhotoEnumeratorError: Error {
+        case thumbnailAlreadyPending
+        case thumbnailNotAvailable
     }
 
     @MainActor
@@ -64,6 +83,20 @@ final class PhotoEnumerator: NSObject, ObservableObject {
             let size = f.fileSize
             let uti = f.uti ?? "<unknown>"
             print("  \(name) | \(date) | \(size) bytes | \(uti)")
+        }
+
+        // T1.3 verification: dump thumbnail of first file. Remove or relocate
+        // to UI layer in Phase 4.
+        if let first = sorted.first {
+            Task {
+                do {
+                    let nsImage = try await ThumbnailLoader.loadThumbnail(for: first, via: self)
+                    let url = try ThumbnailLoader.dumpJPEG(nsImage)
+                    print("[ThumbnailLoader] Saved thumbnail (\(Int(nsImage.size.width))x\(Int(nsImage.size.height))) → \(url.path)")
+                } catch {
+                    print("[ThumbnailLoader] Failed: \(error)")
+                }
+            }
         }
     }
 }
@@ -122,7 +155,19 @@ extension PhotoEnumerator: ICCameraDeviceDelegate {
         didReceiveThumbnail thumbnail: CGImage?,
         for item: ICCameraItem,
         error: (any Error)?
-    ) {}
+    ) {
+        let id = ObjectIdentifier(item)
+        Task { @MainActor in
+            guard let cont = self.pendingThumbnails.removeValue(forKey: id) else { return }
+            if let error = error {
+                cont.resume(throwing: error)
+            } else if let thumbnail = thumbnail {
+                cont.resume(returning: thumbnail)
+            } else {
+                cont.resume(throwing: PhotoEnumeratorError.thumbnailNotAvailable)
+            }
+        }
+    }
 
     nonisolated func cameraDevice(
         _ camera: ICCameraDevice,

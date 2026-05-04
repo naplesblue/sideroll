@@ -326,27 +326,25 @@ Carthage/Build
 
 ---
 
-#### T1.3 · ThumbnailLoader — `TODO`
+#### T1.3 · ThumbnailLoader — `DONE` (2026-05-04)
 
 **目标**：异步拉一张照片的缩略图，落到 `NSImage`。
 
 **文件**：`SideRoll/Services/ThumbnailLoader.swift`
 
-**依赖**：T1.2
+**实现**：
+- `PhotoEnumerator` 持有 `pendingThumbnails: [ObjectIdentifier: CheckedContinuation<CGImage, Error>]` 注册表，暴露 `requestThumbnail(for:) async throws -> CGImage`
+- `requestThumbnail` 用 `withCheckedThrowingContinuation` + `item.requestThumbnail()` 触发，等 delegate 的 `didReceiveThumbnail:for:error:` 回调用 `ObjectIdentifier(item)` 找到对应 continuation 续延
+- `ThumbnailLoader` 是无状态 enum，提供 `loadThumbnail(for:via:)` 把 `CGImage` 包成 `NSImage`，外加 `dumpJPEG(_:)` 便于验证
 
-**实现要点**：
-- 输入 `ICCameraFile`，输出 `NSImage`
-- 优先用 `file.thumbnailIfAvailable`（同步，可能为 nil）
-- 否则调用 `file.requestThumbnail()` 或类似异步 API（具体 API 名查 ImageCaptureCore 文档，macOS 26 可能有变化）
-- 用 `async/await` 包装，避免 callback 嵌套
+**验收结果**：
+- ✅ 在 `reportFirstTen` 末尾插了 verification trigger，针对首张文件 dump 缩略图到沙箱 `tmp/sideroll-thumb.jpg`
+- ✅ 用户肉眼确认图是真实照片缩略图，非占位符
 
-**验收**：
-- 写一个测试函数：取 `mediaFiles[0]`，加载缩略图，保存到 `/tmp/thumb.jpg`，肉眼看正常
-- 缩略图尺寸约 256x256，不是占位符
-
-**坑**：
-- `thumbnailIfAvailable` 可能持续返回 nil，要触发请求后等 delegate 回调
-- 缩略图请求是异步的，不要在 UI 主线程同步等待
+**实战发现**：
+- `ICCameraItem.thumbnailIfAvailable` 在 macOS 10.15 起 deprecated。modern API 直接 `item.requestThumbnail()` 触发，框架内部自带缓存，不必自己 short-circuit
+- `requestThumbnail` 不返回 Future，是 fire-and-forget，结果在 delegate `didReceiveThumbnail:for:error:` 里以 `(CGImage?, Error?)` 形式给到——比老的 `didReceiveThumbnailFor:` callback + 二次属性读取干净一档
+- verification trigger 现在嵌在 `PhotoEnumerator.reportFirstTen` 末尾，**Phase 4 实现 `CandidateGridView` 时应迁移到 UI 层并移除**
 
 ---
 
@@ -697,7 +695,7 @@ enum TimeWindowResolver {
 | Phase | 状态 |
 |---|---|
 | 0 · 脚手架 | ✅ 3/3 完成 |
-| 1 · iPhone USB | 2/3（T1.1、T1.2 done） |
+| 1 · iPhone USB | ✅ 3/3 完成 |
 | 2 · 相机解析 | 0/4 |
 | 3 · 导入引擎 | 0/4 |
 | 4 · SwiftUI | 0/5 |
@@ -705,12 +703,13 @@ enum TimeWindowResolver {
 
 ### 下一步
 
-**第一个待做任务：T1.3 · ThumbnailLoader**（参见 §5）
+**第一个待做任务：T2.1 · CameraPhoto 模型**（参见 §5）
 
-⚠️ T1.3 提醒：
-- macOS 26 SDK 把 `didReceiveThumbnail:` 加上了 `thumbnail: CGImage?` 和 `error:` 参数——缩略图直接在 callback 里给，不用再二次访问属性
-- `ICCameraFile.thumbnailIfAvailable` 可能仍 nil，必须主动调 `requestThumbnail()` 触发请求
-- 缩略图请求是异步的，UI 不要同步等
+进入 Phase 2（相机文件夹解析），离开 ImageCaptureCore，转 ImageIO + EXIF 解析。这块比 Phase 1 风险低，主要变量是 NEF 文件能否被 ImageIO 正确解出 `DateTimeOriginal`（T2.3 验证）。
+
+待还的技术债：
+- T1.3 验证 dump 缩略图代码嵌在 `PhotoEnumerator.reportFirstTen()` 末尾——Phase 4 实现 `CandidateGridView` 时迁出去
+- `device(_:didReceiveStatusInformation:)` 的 dict key 类型 warning 仍在，留作 no-op，不影响功能
 
 ### 已知问题 / 开放问题
 
