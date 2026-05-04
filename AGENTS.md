@@ -399,30 +399,30 @@ struct CameraPhoto: Identifiable, Hashable, Sendable {
 
 ---
 
-#### T2.4 · TimeWindowResolver + 单元测试 — `TODO`
+#### T2.4 · TimeWindowResolver + 单元测试 — `DONE` (2026-05-04)
 
 **文件**：`SideRoll/Services/TimeWindowResolver.swift`、`SideRollTests/TimeWindowResolverTests.swift`
 
 **API**：
 ```swift
-struct TimeWindow {
-    let start: Date
-    let end: Date
-}
-
+struct TimeWindow: Hashable, Sendable { let start, end: Date }
 enum TimeWindowResolver {
-    static func resolve(photos: [CameraPhoto], buffer: TimeInterval = 7200) -> TimeWindow?
-    // 返回 nil 当 photos 为空
+    static let defaultBuffer: TimeInterval = 7200
+    nonisolated static func resolve(photos: [CameraPhoto], buffer: TimeInterval = defaultBuffer) -> TimeWindow?
 }
 ```
 
-**单测覆盖**：
-- 空数组 → nil
-- 单张 → start/end 都是该张时间 ± buffer
-- 多张 → start = 最早 - buffer, end = 最晚 + buffer
-- buffer = 0 → start = 最早, end = 最晚
+**验收结果**（Swift Testing，6 个用例全绿）：
+- ✅ 空数组返回 nil
+- ✅ 单张：start/end = 时间 ∓ buffer
+- ✅ 多张乱序：start = min(captureDate) - buffer, end = max(captureDate) + buffer
+- ✅ buffer = 0：返回精确 [min, max]
+- ✅ 跨 3 天的多张：窗口完整覆盖
+- ✅ 默认 buffer 是 7200 秒（2 小时）
 
-**验收**：单测全绿，`xcodebuild test` 通过。
+**实战发现**：
+- 项目用的是 Swift Testing（`import Testing` + `@Test`），不是 XCTest——这是 Xcode 26 默认。`#expect(...)` 替代 `XCTAssertEqual`
+- 用 `nonisolated` 标 static 方法，让它能从 detached / 任意 actor 上下文调用，与项目 `MainActor` 默认隔离不冲突
 
 ---
 
@@ -683,14 +683,19 @@ enum TimeWindowResolver {
 |---|---|
 | 0 · 脚手架 | ✅ 3/3 完成 |
 | 1 · iPhone USB | ✅ 3/3 完成 |
-| 2 · 相机解析 | 3/4（T2.1、T2.2、T2.3 done） |
+| 2 · 相机解析 | ✅ 4/4 完成 |
 | 3 · 导入引擎 | 0/4 |
 | 4 · SwiftUI | 0/5 |
 | 5 · 验收 | 0/3 |
 
 ### 下一步
 
-**第一个待做任务：T2.4 · TimeWindowResolver + 单元测试**（参见 §5）
+**第一个待做任务：T3.1 · ImportEngine 基础下载**（参见 §5）
+
+⚠️ 进入 Phase 3 提醒：
+- `requestDownloadFile(_:options:downloadDelegate:didDownloadSelector:contextInfo:)` 在 macOS 26 SDK 可能签名也变了——需要先看 SDK 头文件确认（参考 T1.2 的 `didAddItems` → `didAdd` 经验）
+- 下载是异步的，options 字典 key 可能改成 `ICDownloadOption` 类型而非 `String`
+- 下载完成后回调里给的是文件 URL（写到了 `ICDownloadsDirectoryURL`），可以校验是否真存在
 
 待还的技术债：
 - T1.3 验证 dump 缩略图代码嵌在 `PhotoEnumerator.reportFirstTen()` 末尾——Phase 4 实现 `CandidateGridView` 时迁出去
