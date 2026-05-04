@@ -660,7 +660,7 @@ enum TimeWindowResolver {
 | 设备发现 | 插上 iPhone 后启动 App | ≤5s 显示设备名 |
 | 窗口计算 | 拖入真实多日旅行文件夹 | 打印的 [start, end] 肉眼覆盖整次旅行 |
 | 候选准确性 | iPhone 上人为准备 N 张旅行内 + M 张旅行外照片 | 候选列表数量 = N（允许 ±缓冲带来的边界波动） |
-| Live Photo 配对 | 选一张 Live Photo 导入 | 目标目录 .HEIC + .MOV 都在，basename 相同 |
+| HEIC 单图导入 | 选一张 iPhone Live Photo 导入 | 目标目录只有 .HEIC（iOS PTP 限制，详见 §2 / T3.2） |
 | HEIC 完整性 | 导入后用 Preview 打开 + `exiftool` 对比 | 可正常显示，DateTimeOriginal 与原始一致 |
 | 幂等 | 连续点两次"导入" | 第二次全部 skipped，文件 mtime 不变 |
 | 失败恢复 | 导入中途拔 iPhone | 不 crash，剩余标 failed |
