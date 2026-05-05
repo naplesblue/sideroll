@@ -11,15 +11,14 @@ struct SideRollApp: App {
     @StateObject private var deviceBrowser = DeviceBrowser()
     @State private var enumerator: PhotoEnumerator?
 
-    init() {
-        // Force dark mode — Light Mode not yet adapted
-        NSApp.appearance = NSAppearance(named: .darkAqua)
-    }
-
     var body: some Scene {
         WindowGroup {
             ContentView(enumerator: enumerator)
                 .environmentObject(deviceBrowser)
+                .onAppear {
+                    // Force dark mode — Light Mode not yet adapted
+                    NSApp.appearance = NSAppearance(named: .darkAqua)
+                }
                 .task {
                     deviceBrowser.start()
                 }
