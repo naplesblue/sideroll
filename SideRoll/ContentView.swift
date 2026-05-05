@@ -219,14 +219,25 @@ struct ContentView: View {
         guard let folder = targetFolder, let enumerator else { return }
         let destName = subfolderName.trimmingCharacters(in: .whitespaces).isEmpty ? "iPhone" : subfolderName
         let destFolder = folder.appendingPathComponent(destName, isDirectory: true)
-        let filesToImport = selectedFiles
-        guard !filesToImport.isEmpty else { return }
+        guard !selectedFiles.isEmpty else { return }
+
+        // Expand each selected file to include its Live Photo .MOV sidecar
+        // (when present). Each row carries the parent's EXIF date so the
+        // .MOV gets the same file-system timestamp, keeping pairs together
+        // in chronological views.
+        let resolvedDates = exifDates
+        struct Pending { let file: ICCameraFile; let preferredDate: Date? }
+        let pending: [Pending] = selectedFiles.flatMap { parent -> [Pending] in
+            let date = parent.name.flatMap { resolvedDates[$0] }
+            return LivePhotoPairing.filesToImport(for: parent).map {
+                Pending(file: $0, preferredDate: date)
+            }
+        }
+        guard !pending.isEmpty else { return }
 
         // Capture option values before entering async context
         let skipExisting = onlyNewFiles
         let preserveEXIF = keepOriginalEXIF
-        let quitAfter = autoQuit
-        let resolvedDates = exifDates
 
         let engine = ImportEngine(device: enumerator.device)
         isImporting = true
@@ -236,26 +247,24 @@ struct ContentView: View {
 
         Task {
             var downloaded = 0, skipped = 0, failed = 0
-            let total = filesToImport.count
+            let total = pending.count
 
-            for (i, file) in filesToImport.enumerated() {
+            for (i, item) in pending.enumerated() {
                 if importCancelled {
                     let remaining = total - i
                     importProgressText = "已取消 · \(downloaded) 已传送 · \(remaining) 剩余"
                     break
                 }
 
-                importProgressText = "[\(i + 1)/\(total)] \(file.name ?? "?")"
+                importProgressText = "[\(i + 1)/\(total)] \(item.file.name ?? "?")"
 
                 do {
-                    let result = try await engine.download(file: file, to: destFolder, skipExisting: skipExisting)
+                    let result = try await engine.download(file: item.file, to: destFolder, skipExisting: skipExisting)
                     switch result {
                     case .downloaded(let url):
                         downloaded += 1
-                        // Set file dates to EXIF capture time
-                        if preserveEXIF, let name = file.name,
-                           let exifDate = resolvedDates[name] {
-                            engine.setFileDate(url, to: exifDate)
+                        if preserveEXIF, let date = item.preferredDate {
+                            engine.setFileDate(url, to: date)
                         }
                     case .skipped:
                         skipped += 1
@@ -271,7 +280,7 @@ struct ContentView: View {
                 importResultMessage = "\(downloaded) 张已传送\(skipped > 0 ? "\n\(skipped) 张已跳过（重复）" : "")\(failed > 0 ? "\n\(failed) 张失败" : "")"
                 importProgressText = "完成 · \(downloaded) 已传送 · \(skipped) 已跳过 · \(failed) 失败"
             } else {
-                importResultMessage = "已取消\n\(downloaded) 张已传送，\(filesToImport.count - downloaded - skipped - failed) 张未处理"
+                importResultMessage = "已取消\n\(downloaded) 张已传送，\(total - downloaded - skipped - failed) 张未处理"
             }
             isImporting = false
             showImportResult = true

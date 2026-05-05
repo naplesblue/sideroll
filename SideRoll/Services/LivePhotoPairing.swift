@@ -6,69 +6,33 @@
 import Foundation
 import ImageCaptureCore
 
+/// Live Photo companion lookup via `ICCameraFile.sidecarFiles`.
+///
+/// iOS PTP **does** expose Live Photo motion videos — they're not enumerated
+/// at the top of `ICCameraDevice.mediaFiles`, they hang off the parent
+/// HEIC's `sidecarFiles` property. Image Capture.app uses the same path.
+/// (We previously concluded the opposite by counting `.MOV` entries in
+/// `mediaFiles`; that was looking in the wrong place.)
 enum LivePhotoPairing {
-    nonisolated static let imageExtensions: Set<String> = ["heic", "heif", "jpg", "jpeg"]
-    nonisolated static let videoExtensions: Set<String> = ["mov", "mp4"]
+    nonisolated static let videoExtensions: Set<String> = ["mov", "mp4", "m4v"]
 
-    /// Returns the .MOV/.MP4 companion of `file` in `all`, when `file` is an
-    /// image whose basename matches a video file in the same set. iPhone
-    /// reports Live Photos as two separate files (e.g. `IMG_0001.HEIC` +
-    /// `IMG_0001.MOV`) sharing a basename; we match by basename + extension
-    /// since the UTI from PTP is the generic `public.image` for everything.
-    nonisolated static func videoCompanion(
-        of file: ICCameraFile,
-        in all: [ICCameraFile]
-    ) -> ICCameraFile? {
-        guard let name = file.name, isImage(name: name) else { return nil }
-        let basename = (name as NSString).deletingPathExtension
-        return all.first { other in
-            guard other !== file,
-                  let otherName = other.name,
-                  isVideo(name: otherName) else { return false }
-            return (otherName as NSString).deletingPathExtension == basename
+    /// Video sidecars (Live Photo motion .MOV) of `file`. Skips non-video
+    /// sidecars such as `.AAE` (Photos.app edit instructions — meaningless
+    /// outside Photos.app, so we don't drag them along).
+    nonisolated static func videoSidecars(of file: ICCameraFile) -> [ICCameraFile] {
+        let sidecars = file.sidecarFiles ?? []
+        return sidecars.compactMap { item -> ICCameraFile? in
+            guard let f = item as? ICCameraFile,
+                  let name = f.name else { return nil }
+            let ext = (name as NSString).pathExtension.lowercased()
+            return videoExtensions.contains(ext) ? f : nil
         }
     }
 
-    /// Files to download when the user selects `file`. For an image with a
-    /// matching video → returns [image, video]. For anything else → [file].
-    nonisolated static func filesToImport(
-        for file: ICCameraFile,
-        in all: [ICCameraFile]
-    ) -> [ICCameraFile] {
-        if let companion = videoCompanion(of: file, in: all) {
-            return [file, companion]
-        }
-        return [file]
-    }
-
-    /// All Live Photo (image + video) pairs in the catalog. O(N) via basename
-    /// grouping. Useful for diagnostics and bulk-import planning.
-    nonisolated static func allPairs(
-        in all: [ICCameraFile]
-    ) -> [(image: ICCameraFile, video: ICCameraFile)] {
-        var byBasename: [String: (image: ICCameraFile?, video: ICCameraFile?)] = [:]
-        for f in all {
-            guard let name = f.name else { continue }
-            let base = (name as NSString).deletingPathExtension
-            var entry = byBasename[base] ?? (image: nil, video: nil)
-            if isImage(name: name) {
-                entry.image = f
-            } else if isVideo(name: name) {
-                entry.video = f
-            }
-            byBasename[base] = entry
-        }
-        return byBasename.values.compactMap { entry in
-            guard let img = entry.image, let vid = entry.video else { return nil }
-            return (image: img, video: vid)
-        }
-    }
-
-    nonisolated private static func isImage(name: String) -> Bool {
-        imageExtensions.contains((name as NSString).pathExtension.lowercased())
-    }
-
-    nonisolated private static func isVideo(name: String) -> Bool {
-        videoExtensions.contains((name as NSString).pathExtension.lowercased())
+    /// Full set of files to download when the user selects `file` —
+    /// `file` itself plus any video sidecars. For a non-Live photo this
+    /// is just `[file]`.
+    nonisolated static func filesToImport(for file: ICCameraFile) -> [ICCameraFile] {
+        [file] + videoSidecars(of: file)
     }
 }

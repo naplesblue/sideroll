@@ -129,41 +129,6 @@ final class PhotoEnumerator: NSObject, ObservableObject {
         availableFiles = sorted
         isLocked = false
         print("[PhotoEnumerator] Catalog ready: \(files.count) files")
-
-        dumpSidecarDiagnostic(sorted)
-    }
-
-    /// One-shot probe: does ICCameraFile.sidecarFiles expose Live Photo .MOV
-    /// companions on iOS PTP? (Image Capture.app pulls them, so the API
-    /// surface should exist somewhere — the question is whether mediaFiles
-    /// already contains them or they're hung off this property.)
-    /// Remove once T3.2 is properly resolved.
-    @MainActor
-    private func dumpSidecarDiagnostic(_ files: [ICCameraFile]) {
-        let heics = files.filter {
-            (($0.name ?? "") as NSString).pathExtension.lowercased() == "heic"
-        }
-        let sample = Array(heics.suffix(10))
-        print("[Sidecar] Last 10 HEIC files — sidecarFiles content:")
-        var sampleWithSidecars = 0
-        for f in sample {
-            let name = f.name ?? "<unnamed>"
-            let sidecars = f.sidecarFiles ?? []
-            if sidecars.isEmpty {
-                print("  \(name): []")
-            } else {
-                sampleWithSidecars += 1
-                let descs = sidecars.map { (item: ICCameraItem) -> String in
-                    let n = item.name ?? "?"
-                    let size = (item as? ICCameraFile)?.fileSize ?? 0
-                    return "\(n)(\(size)b)"
-                }.joined(separator: ", ")
-                print("  \(name): [\(descs)]")
-            }
-        }
-        print("[Sidecar] sample: \(sampleWithSidecars)/\(sample.count) HEICs have non-empty sidecarFiles")
-        let totalWithSidecars = files.filter { !($0.sidecarFiles ?? []).isEmpty }.count
-        print("[Sidecar] catalog: \(totalWithSidecars)/\(files.count) files have non-empty sidecarFiles")
     }
 }
 

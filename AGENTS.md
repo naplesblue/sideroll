@@ -37,7 +37,7 @@
 | iPhone 读取 | USB 直连 + `ImageCaptureCore` | 不依赖 iCloud 同步状态，确保拿到原图 |
 | 时间窗口 | 相机首末张 ± 可配置缓冲（默认 ±2 小时） | 简单稳健，覆盖出门到回家 |
 | HEIC 格式 | **保留原格式，不转 JPG** | LR/C1 都已支持 HEIC，转 JPG 损失元信息 |
-| Live Photo | **静帧 .HEIC 导入，动效 .MOV 不可得** | iOS PTP 不暴露 Live Photo 配对 .MOV（2026-05-04 用 macOS 自带"图像捕捉"App 在 iPhone 17 Pro 上反向验证：连 Apple 自己的工具都只能看到 HEIC）。坚持 USB 直连方案的代价。用户原话"后期编辑多数是 DNG，少数是 HEIC，MOV 现在没需求"——可接受 |
+| Live Photo | **连同 .MOV 一起复制**（通过 `ICCameraFile.sidecarFiles`） | 2026-05-05 实测：660 张 HEIC 中 635 张通过 `sidecarFiles` 暴露了配对 .MOV。Image Capture.app 用的也是同一通路。早期 T3.2 错误地从 `mediaFiles` 顶层数 .MOV 数量后下结论"iOS 不暴露"——这属于查错了 API 入口（详见 §5 T3.2）|
 | 文件命名 | **保留 iPhone 原文件名** | 不加时间戳前缀 |
 | 导入前预览 | **必须有，强制确认** | 避免误导入大量非旅行照片 |
 | 主力 RAW 格式 | Nikon NEF | 用户主力相机品牌 |
@@ -49,8 +49,8 @@
 - 时间戳前缀重命名
 - 多设备并行（一次只服务一台 iPhone）
 - 自动检测时区错误并平移窗口（v1 用 ±缓冲足够）
-- **Live Photo 动效保留**（iOS PTP 系统限制，2026-05-04 实测确认）
-- **从 iPhone 远程删除文件**（iOS PTP 不支持 `requestDeleteFiles`，2026-05-05 实测确认 "Delete files failed"）
+- **从 iPhone 远程删除文件**（iOS PTP 不宣布 `ICCameraDeviceCanDeleteOneFile` capability。2026-05-05 用 macOS 自带"图像捕捉"反向验证：连 Apple 自己工具的 Delete 菜单都置灰）
+- **Photos.app 编辑指令保留**（`.AAE` sidecar 文件不导入——只对 Photos.app 有意义）
 
 ---
 
@@ -168,7 +168,7 @@ ImportEngine（requestDownloadFile → 用户可编辑的目标子文件夹）
 | 大量照片性能 | `mediaFiles` 在 iPhone 上可能上万。先用 `creationDate` 粗筛（±24h），对粗筛结果拉 EXIF 精确过滤，再按需拉缩略图（懒加载 + 5s 超时 + 3 次重试） |
 | 重复导入 | `onlyNewFiles` 开：跳过已存在同名文件。关：覆盖 |
 | 单张下载失败 | 不中断批量，最后聚合 |
-| Live Photo .MOV 缺失 | 默认行为（iOS PTP 不暴露 Live Photo 配对视频），只导入 HEIC，不报错 |
+| Live Photo .MOV 配对 | 通过 `ICCameraFile.sidecarFiles` 取得（不在 `mediaFiles` 顶层）。`LivePhotoPairing.filesToImport(for:)` 自动展开 [HEIC] → [HEIC, MOV]。`.AAE` sidecar 跳过（Photos.app 编辑元数据，对 LR/C1 无用）|
 | 中途拔 iPhone | 剩余文件标记 failed，不 crash |
 | 导入完成 | 弹出 alert 对话框，显示结果摘要。若"完成后退出"开启，按钮变为"完成并退出" |
 | DCIM 重名文件 | iPhone 不同 DCIM 子文件夹可能有同名文件，`CandidateGridView` 按 name 去重避免 ForEach ID 冲突 |
@@ -455,26 +455,34 @@ enum TimeWindowResolver {
 
 ---
 
-#### T3.2 · LivePhotoPairing — `DONE` (2026-05-04)
+#### T3.2 · LivePhotoPairing — `DONE` (2026-05-05, **重做**)
 
-**目标（修订）**：识别同 basename 的 `image + video` 配对（`.HEIC/.JPG` + `.MOV/.MP4`），导入时一起拷。**Live Photo 动效保留实际不可达**——见 §2 决策修订。
+**目标**：导入 Live Photo 时同时复制配对 .MOV，保留动效。
 
 **文件**：`SideRoll/Services/LivePhotoPairing.swift`
 
-**实现**：
-- `videoCompanion(of:in:)` 按 basename 找视频配对
-- `filesToImport(for:in:)` 返回应同时下载的文件集（[image] 或 [image, video]）
-- `allPairs(in:)` O(N) basename 分组，给诊断/批量计划用
+**实现**（最终版）：
+- 单一入口 `filesToImport(for: ICCameraFile) -> [ICCameraFile]`
+- 内部用 `file.sidecarFiles` 取配对，过滤到 `videoExtensions`（`mov` / `mp4` / `m4v`），跳过 `.AAE`
+- ContentView.startImport 把 `selectedFiles` 用 `flatMap` 展开到 `[(file, parentDate)]`，主图和 .MOV 用同一个 EXIF 时间写入文件系统时间，保证 Finder 排序成对
 
-**验收结果**：
-- ✅ pairing 逻辑代码正确：在用户 1714 项库中检测到 2 对 image+video（推断为偶然同 basename 的独立视频，非 Live Photo 配对）
-- ✅ 扩展名分布：jpg 840 / heic 660 / dng 99 / png 41 / jpeg 34 / mov 34 / mp4 5 / gif 1
-- ❌ Live Photo 动效保留：**不可能**——iOS PTP 不暴露 Live Photo 配对 .MOV，macOS 自带"图像捕捉"App 同样看不到，是 iOS 系统层限制
+**验收结果**（NaplesIP17Pro 真机）：
+- ✅ 10/10 最近 HEIC 都有 .MOV sidecar，全库 635/1714（≈37%）
+- ✅ 出现的 sidecar 类型：`.MOV`（视频，全部包含）、`.AAE`（编辑指令，不导入）
+- ⏳ 实际导入回流验证待完整跑一遍后补
 
-**实战发现**（重要约束）：
-- iOS 把 Live Photo 主图 + 动效视频作为同一 PHAsset 存储，PTP/MTP 协议层只暴露主图
-- 想要拿到 Live Photo 动效，唯一路径是 PhotoKit + Photos library 权限，与本项目"USB 直连，不依赖 iCloud 同步状态"决策矛盾。**v1 不做，记入 §2 排除项**
-- 留下的 pairing 代码不是死码：用户如果用其他方式（如手动）让 iPhone 上同名 image+video 共存，仍会被识别为一组导入
+**审计：早期错误结论的来龙去脉**（2026-05-04 → 2026-05-05）：
+
+第一次 T3.2 的实施和验证完全跑偏，但跑偏过程留下的诊断数据反而帮助找到正确路径，记录在此防止未来 AI 再走一遍：
+
+1. **错误前提**：以为 Live Photo 的 .HEIC + .MOV 都在 `mediaFiles` 顶层用同 basename 出现，写了 basename 匹配版的 `videoCompanion` / `allPairs`
+2. **错误验证**：在 1714 个 mediaFiles 项目里只找到 2 对同 basename，错误地把数字偏低归因为"iOS PTP 不暴露 Live Photo 配对"
+3. **错误结论**：在 §2 把 Live Photo 动效列入"v1 不做"，写进 memory
+4. **触发反思**：用户提到"图像捕捉 App 导入 HEIC 时同时把配对 .MOV 也带过来"——Apple 自己的工具能拿到说明 API 一定存在
+5. **正确入口**：查文档发现 `ICCameraFile.sidecarFiles` 属性。诊断 dump（commit `e41beaf`）证实 10/10 HEIC 都有 .MOV sidecar
+6. **教训**：当 mediaFiles 数据看着不对时，**先查 ICCameraFile 上有没有别的属性挂着配对信息**，不要直接下"系统不支持"的结论。真正的"系统不支持"应该用 Apple 工具反向验证（Live Photo 没做这步，Delete 做了）
+
+留作活档保存——参见 `~/.claude/projects/.../memory/lesson_check_sidecarfiles_property.md`
 
 ---
 
@@ -674,7 +682,7 @@ enum TimeWindowResolver {
 | 设备发现 | 插上 iPhone 后启动 App | ≤5s 显示设备名 |
 | 窗口计算 | 拖入真实多日旅行文件夹 | 打印的 [start, end] 肉眼覆盖整次旅行 |
 | 候选准确性 | iPhone 上人为准备 N 张旅行内 + M 张旅行外照片 | 候选列表数量 = N（允许 ±缓冲带来的边界波动） |
-| HEIC 单图导入 | 选一张 iPhone Live Photo 导入 | 目标目录只有 .HEIC（iOS PTP 限制，详见 §2 / T3.2） |
+| Live Photo 配对 | 选一张 iPhone Live Photo 导入 | 目标目录同时出现 `IMG_xxxx.HEIC` 和 `IMG_xxxx.MOV`（通过 `sidecarFiles`，详见 §5 T3.2） |
 | HEIC 完整性 | 导入后用 Preview 打开 + `exiftool` 对比 | 可正常显示，DateTimeOriginal 与原始一致 |
 | 幂等 | 连续点两次"导入" | 第二次全部 skipped，文件 mtime 不变 |
 | 失败恢复 | 导入中途拔 iPhone | 不 crash，剩余标 failed |
