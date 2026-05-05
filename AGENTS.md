@@ -65,6 +65,7 @@
 | Bundle ID | `nbhd.SideRoll` |
 | App Sandbox | 已开启 (`ENABLE_APP_SANDBOX = YES`) |
 | Default Actor Isolation | `MainActor`（`SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor`，注意 ImageCaptureCore delegate 的 actor 隔离问题） |
+| 外观模式 | 强制 Dark Mode（`NSApp.appearance = .darkAqua`，Light Mode 未适配） |
 | 文件同步模式 | `PBXFileSystemSynchronizedRootGroup`（Xcode 自动同步源文件夹下所有内容，无需手动加 `.pbxproj` 引用） |
 
 ### 仓库结构（当前）
@@ -789,4 +790,4 @@ App 核心功能已全部实现并真机验证通过。Sidebar 选项已接入�
 
 ---
 
-**最后更新**：2026-05-05 by Antigravity (选项接入 + EXIF/日期 bug 修复)
+**最后更新**：2026-05-05 by Antigravity (Live Photo sidecar + 强制 Dark Mode + EXIF/日期 bug 修复)
