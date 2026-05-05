@@ -20,6 +20,7 @@ struct ContentView: View {
     @State private var selectedNames: Set<String> = []
     @State private var exifDates: [String: Date] = [:]   // fileName → EXIF DateTimeOriginal
     @State private var exifFetched: Set<String> = []     // files where EXIF was attempted
+    @State private var existingFiles: Set<String> = []   // files already in target subfolder
 
     // Import state
     @State private var isImporting = false
@@ -121,7 +122,9 @@ struct ContentView: View {
                         candidates: candidates,
                         selectedNames: $selectedNames,
                         enumerator: enumerator,
-                        exifDates: exifDates
+                        exifDates: exifDates,
+                        existingFiles: existingFiles,
+                        onlyNewFiles: onlyNewFiles
                     )
                 }
             }
@@ -150,10 +153,13 @@ struct ContentView: View {
             }
         }
         .onChange(of: cameraPhotos) { _, _ in
+            scanExistingFiles()
             autoSelectAll()
             fetchEXIFDates()
         }
         .onChange(of: buffer) { _, _ in autoSelectAll() }
+        .onChange(of: onlyNewFiles) { _, _ in autoSelectAll() }
+        .onChange(of: subfolderName) { _, _ in scanExistingFiles() }
         .alert("传送完成", isPresented: $showImportResult) {
             Button(autoQuit ? "完成并退出" : "完成") {
                 if autoQuit {
@@ -166,7 +172,28 @@ struct ContentView: View {
     }
 
     private func autoSelectAll() {
-        selectedNames = Set(candidates.compactMap(\.name))
+        if onlyNewFiles {
+            // Only select candidates not already in target folder
+            selectedNames = Set(candidates.compactMap(\.name).filter { !existingFiles.contains($0) })
+        } else {
+            selectedNames = Set(candidates.compactMap(\.name))
+        }
+    }
+
+    /// Scan the target subfolder for already-imported filenames.
+    private func scanExistingFiles() {
+        guard let folder = targetFolder else {
+            existingFiles = []
+            return
+        }
+        let destName = subfolderName.trimmingCharacters(in: .whitespaces).isEmpty ? "iPhone" : subfolderName
+        let destFolder = folder.appendingPathComponent(destName, isDirectory: true)
+        let fm = FileManager.default
+        guard let contents = try? fm.contentsOfDirectory(at: destFolder, includingPropertiesForKeys: nil) else {
+            existingFiles = []
+            return
+        }
+        existingFiles = Set(contents.map { $0.lastPathComponent })
     }
 
     /// Fetch EXIF DateTimeOriginal for iPhone photos whose creationDate falls
@@ -283,6 +310,8 @@ struct ContentView: View {
                 importResultMessage = "已取消\n\(downloaded) 张已传送，\(total - downloaded - skipped - failed) 张未处理"
             }
             isImporting = false
+            scanExistingFiles()
+            autoSelectAll()
             showImportResult = true
         }
     }

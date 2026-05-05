@@ -11,6 +11,8 @@ struct CandidateGridView: View {
     @Binding var selectedNames: Set<String>
     var enumerator: PhotoEnumerator?
     var exifDates: [String: Date]
+    var existingFiles: Set<String>
+    var onlyNewFiles: Bool
 
     private let columns = [GridItem(.adaptive(minimum: 110, maximum: 150))]
 
@@ -34,9 +36,11 @@ struct CandidateGridView: View {
                         // Deduplicate by name (DCIM subfolders can have same-named files)
                         let unique = deduplicatedByName(candidates)
                         ForEach(unique, id: \.name) { file in
+                            let alreadyImported = existingFiles.contains(file.name ?? "")
                             CandidateTile(
                                 file: file,
                                 isSelected: selectedNames.contains(file.name ?? ""),
+                                isDimmed: onlyNewFiles && alreadyImported,
                                 enumerator: enumerator,
                                 exifDates: exifDates
                             ) {
@@ -74,6 +78,7 @@ struct CandidateGridView: View {
 struct CandidateTile: View {
     let file: ICCameraFile
     let isSelected: Bool
+    var isDimmed: Bool = false
     var enumerator: PhotoEnumerator?
     var exifDates: [String: Date]
     let onToggle: () -> Void
@@ -154,6 +159,7 @@ struct CandidateTile: View {
             .padding(.horizontal, 2)
             .padding(.top, 2)
         }
+        .opacity(isDimmed ? 0.35 : 1.0)
         .task(id: file.name) {
             await loadThumbnail()
         }
