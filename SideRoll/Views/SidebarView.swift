@@ -13,9 +13,8 @@ struct SidebarView: View {
     var timeWindow: TimeWindow?
 
     @Binding var onlyNewFiles: Bool
-    @Binding var autoDisconnect: Bool
+    @Binding var autoQuit: Bool
     @Binding var keepOriginalEXIF: Bool
-    @Binding var deleteAfterImport: Bool
 
     @State private var isScanning = false
 
@@ -150,9 +149,8 @@ struct SidebarView: View {
     private var preferencesSection: some View {
         VStack(alignment: .leading, spacing: 12) {
             prefToggle("只传送新文件", isOn: $onlyNewFiles)
-            prefToggle("传送完成后自动断开", isOn: $autoDisconnect)
             prefToggle("保留原 EXIF 时间", isOn: $keepOriginalEXIF)
-            prefToggle("完成后删除 iPhone 原文件", isOn: $deleteAfterImport, dimmed: true)
+            prefToggle("完成后退出", isOn: $autoQuit)
         }
     }
 

@@ -30,7 +30,13 @@ final class PhotoEnumerator: NSObject, ObservableObject {
     }
 
     func stop() {
+        print("[PhotoEnumerator] Closing session…")
         device.requestCloseSession()
+    }
+
+    func eject() {
+        print("[PhotoEnumerator] Ejecting device…")
+        device.requestEjectOrDisconnect()
     }
 
     @MainActor
@@ -66,12 +72,22 @@ final class PhotoEnumerator: NSObject, ObservableObject {
         }
     }
 
-    /// Extract EXIF DateTimeOriginal from metadata dict returned by requestMetadata.
+    /// Extract capture date from metadata dict returned by requestMetadata.
+    /// Tries {Exif}.DateTimeOriginal first (photos), then {TIFF}.DateTime (videos).
     nonisolated static func exifCaptureDate(from metadata: [AnyHashable: Any]) -> Date? {
-        // ImageIO-style keys: "{Exif}" dict contains "DateTimeOriginal"
-        guard let exif = metadata["{Exif}"] as? [String: Any],
-              let dateStr = exif["DateTimeOriginal"] as? String else { return nil }
-        return exifDateFormatter.date(from: dateStr)
+        // Photos: {Exif} → DateTimeOriginal
+        if let exif = metadata["{Exif}"] as? [AnyHashable: Any],
+           let dateStr = exif["DateTimeOriginal"] as? String,
+           let date = exifDateFormatter.date(from: dateStr) {
+            return date
+        }
+        // Videos (MOV/MP4): {TIFF} → DateTime
+        if let tiff = metadata["{TIFF}"] as? [AnyHashable: Any],
+           let dateStr = tiff["DateTime"] as? String,
+           let date = exifDateFormatter.date(from: dateStr) {
+            return date
+        }
+        return nil
     }
 
     nonisolated private static let exifDateFormatter: DateFormatter = {
@@ -206,6 +222,14 @@ extension PhotoEnumerator: ICCameraDeviceDelegate {
     nonisolated func cameraDevice(_ camera: ICCameraDevice, didRenameItems items: [ICCameraItem]) {}
     nonisolated func cameraDeviceDidChangeCapability(_ camera: ICCameraDevice) {}
     nonisolated func cameraDevice(_ camera: ICCameraDevice, didReceivePTPEvent eventData: Data) {}
+
+    nonisolated func cameraDevice(_ camera: ICCameraDevice, didCompleteDeleteFilesWithError error: (any Error)?) {
+        if let error = error {
+            print("[PhotoEnumerator] Delete failed: \(error.localizedDescription)")
+        } else {
+            print("[PhotoEnumerator] Delete completed successfully")
+        }
+    }
 
     nonisolated func cameraDeviceDidEnableAccessRestriction(_ device: ICDevice) {
         print("[PhotoEnumerator] Access restriction enabled — iPhone locked")

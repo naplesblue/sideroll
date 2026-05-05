@@ -50,6 +50,7 @@
 - 多设备并行（一次只服务一台 iPhone）
 - 自动检测时区错误并平移窗口（v1 用 ±缓冲足够）
 - **Live Photo 动效保留**（iOS PTP 系统限制，2026-05-04 实测确认）
+- **从 iPhone 远程删除文件**（iOS PTP 不支持 `requestDeleteFiles`，2026-05-05 实测确认 "Delete files failed"）
 
 ---
 
@@ -82,7 +83,7 @@ SideRoll/
 │   │   ├── DeviceBrowser.swift
 │   │   ├── PhotoEnumerator.swift  ← 含 requestThumbnail / requestMetadata 续延
 │   │   ├── ThumbnailLoader.swift
-│   │   ├── CameraFolderScanner.swift  ← 含 excludingSubfolders 参数
+│   │   ├── CameraFolderScanner.swift  ← 含 excludingSubfolders + cameraRAWExtensions
 │   │   ├── TimeWindowResolver.swift
 │   │   ├── ImportEngine.swift
 │   │   └── LivePhotoPairing.swift
@@ -111,7 +112,7 @@ SideRoll/
 ```
 用户选择相机文件夹（NSOpenPanel）
         ↓
-CameraFolderScanner（ImageIO 读 EXIF DateTimeOriginal，排除导入子文件夹）
+CameraFolderScanner（ImageIO 读 EXIF，仅扫描相机 RAW 格式：NEF/CR2/CR3/ARW/RAF/ORF/RW2）
         ↓
 TimeWindowResolver（首末张 ± buffer）→ Date 区间 [start, end]
         ↓
@@ -119,15 +120,20 @@ DeviceBrowser（ICDeviceBrowser 发现 iPhone）
         ↓
 PhotoEnumerator（遍历 ICCameraDevice.mediaFiles）
         ↓
-fetchEXIFDates（requestMetadata → EXIF DateTimeOriginal，粗筛 ±24h 内逐个拉取）
+fetchEXIFDates（粗筛 ±24h → requestMetadata → {Exif}.DateTimeOriginal / {TIFF}.DateTime）
+  ├─ 照片：{Exif}.DateTimeOriginal（精确）
+  ├─ 视频：跳过 EXIF，用 creationDate（PTP 不返回视频 EXIF）
+  └─ EXIF 解析失败：排除（不回退到 creationDate）
         ↓
-candidates 过滤（优先用 EXIF 日期，回退到 creationDate）
+candidates 过滤（exifDates + exifFetched 双数据结构，避免 Date? 字典陷阱）
         ↓
-ThumbnailLoader（懒加载缩略图给 UI，按需请求）
+ThumbnailLoader（懒加载 + 5s 超时 + 3 次重试）
         ↓
-用户在 CandidateGridView 勾选/取消
+用户在 CandidateGridView 勾选/取消（ForEach 按 name 去重）
         ↓
 ImportEngine（requestDownloadFile → 用户可编辑的目标子文件夹）
+  ├─ skipExisting：只传送新文件 / 覆盖
+  └─ setFileDate：保留原 EXIF 时间到文件系统
 ```
 
 ### 关键 API 速记
@@ -138,7 +144,7 @@ ImportEngine（requestDownloadFile → 用户可编辑的目标子文件夹）
 | 过滤设备类型 | `browsedDeviceTypeMask = .camera` |
 | iPhone 文件列表 | `ICCameraDevice.mediaFiles: [ICCameraFile]`（含 `name` / `creationDate` / `fileSize` / `uti`） |
 | 缩略图（异步） | `ICCameraFile.requestThumbnail()` → delegate `didReceiveThumbnail:for:error:` |
-| EXIF 元数据 | `ICCameraItem.requestMetadata()` → delegate `didReceiveMetadata:for:error:` → `{Exif}.DateTimeOriginal` |
+| EXIF 元数据 | `ICCameraItem.requestMetadata()` → delegate `didReceiveMetadata:for:error:` → `{Exif}.DateTimeOriginal`（照片）/ `{TIFF}.DateTime`（视频回退）。**注意：PTP metadata 的 sub-dict 是 `[AnyHashable: Any]`，不是 `[String: Any]`** |
 | 下载 | `ICCameraDevice.requestDownloadFile(_:options:downloadDelegate:didDownloadSelector:contextInfo:)`，options 用 `ICDownloadOption` 类型化 key |
 | 相机 EXIF | `ImageIO`：`CGImageSourceCreateWithURL` → `CGImageSourceCopyPropertiesAtIndex` → `kCGImagePropertyExifDictionary[kCGImagePropertyExifDateTimeOriginal]` |
 | 设备电量 | `ICDevice.batteryLevel` (Int, 0–100) |
@@ -156,15 +162,17 @@ ImportEngine（requestDownloadFile → 用户可编辑的目标子文件夹）
 | 情况 | 处理 |
 |---|---|
 | iPhone 锁屏 | `isLocked` 状态追踪，DeviceBar 显示"请解锁 iPhone 屏幕"。拔插后重连需解锁才能重新枚举 |
-| iPhone 照片日期 | **优先用 EXIF `DateTimeOriginal`**（通过 `requestMetadata` 异步拉取），回退到 `creationDate`。`creationDate` 是文件系统日期，可能被编辑/同步改变 |
-| 相机文件夹递归扫描 | **排除导入目标子文件夹**（默认 `iPhone/`），防止已导入照片污染 TimeWindow |
+| iPhone 照片日期 | **照片**：优先用 EXIF `DateTimeOriginal`（`[AnyHashable: Any]` 格式），解析失败则排除。**视频**：跳过 EXIF 检查，用 `creationDate`（PTP 不返回视频 EXIF）|
+| 相机文件夹扫描 | **仅扫描相机 RAW 格式**（`cameraRAWExtensions`），排除 DNG/JPG/HEIC 后期导出文件（日期可能被修改），排除导入目标子文件夹 |
 | 时区 | `Date` 是绝对时刻，相机/iPhone 时区不同也不影响。但用户的相机时区设错时窗口会偏（v2 再做平移 UI） |
-| 大量照片性能 | `mediaFiles` 在 iPhone 上可能上万。先用 `creationDate` 粗筛（±24h），对粗筛结果拉 EXIF 精确过滤，再按需拉缩略图（懒加载） |
-| 重复导入 | 目标已存在同名文件 → 跳过 + 标记 `.skipped`，**绝不覆盖** |
-| 单张下载失败 | 不中断批量，最后聚合 `[failed: [(file, error)]]` |
+| 大量照片性能 | `mediaFiles` 在 iPhone 上可能上万。先用 `creationDate` 粗筛（±24h），对粗筛结果拉 EXIF 精确过滤，再按需拉缩略图（懒加载 + 5s 超时 + 3 次重试） |
+| 重复导入 | `onlyNewFiles` 开：跳过已存在同名文件。关：覆盖 |
+| 单张下载失败 | 不中断批量，最后聚合 |
 | Live Photo .MOV 缺失 | 默认行为（iOS PTP 不暴露 Live Photo 配对视频），只导入 HEIC，不报错 |
 | 中途拔 iPhone | 剩余文件标记 failed，不 crash |
-| 导入完成 | 弹出 alert 对话框显示结果摘要（已传送/已跳过/失败数），需用户确认 |
+| 导入完成 | 弹出 alert 对话框，显示结果摘要。若"完成后退出"开启，按钮变为"完成并退出" |
+| DCIM 重名文件 | iPhone 不同 DCIM 子文件夹可能有同名文件，`CandidateGridView` 按 name 去重避免 ForEach ID 冲突 |
+| PTP metadata 格式 | sub-dict 是 `[AnyHashable: Any]`，cast 成 `[String: Any]` 会**静默失败** |
 
 ---
 
@@ -546,10 +554,13 @@ enum TimeWindowResolver {
 - **相机文件夹卡片**：显示文件夹名 + 文件数 + RAW 格式 + 时间范围，点击 "选择文件夹" 触发 `NSOpenPanel`
 - **缓冲滑块**：0–12h 范围，步进 30min，amber 主题色，实时显示 `±X.X 小时` 和缓冲后窗口范围（`MM/dd HH:mm` 格式）
 - **目标路径**：显示 `…/文件夹名/<子文件夹>/`，子文件夹名可编辑（TextField，默认 `iPhone`），12pt 字体
-- **选项区**：4 个 toggle（只传送新文件 / 传送完成后自动断开 / 保留原 EXIF 时间 / 完成后删除原文件），macOS 设置风格（文字在左，mini switch 靠右对齐）
+- **选项区**：3 个 toggle，macOS 设置风格（文字在左，mini switch 靠右对齐），`@AppStorage` 持久化：
+  - 只传送新文件（默认开）→ `skipExisting` 参数
+  - 保留原 EXIF 时间（默认开）→ 下载后 `setFileDate` 同步文件系统时间
+  - 完成后退出（默认关）→ alert 按钮变"完成并退出"，点击后 `NSApplication.shared.terminate`
 - **CameraFolderScanner 排除**：扫描时跳过用户设定的导入子文件夹名
 
-**验收**：✅ 布局与设计图一致，选项 toggle 与 macOS 设置风格匹配
+**验收**：✅ 布局与设计图一致，选项 toggle 与 macOS 设置风格匹配，状态跨启动持久化
 
 ---
 
@@ -576,18 +587,21 @@ enum TimeWindowResolver {
 
 **实现**：
 - `LazyVGrid` 自适应列宽（110–150px），4:3 宽高比
-- 缩略图懒加载：`.task(id: file.name)` 触发，屏幕外不请求
+- 缩略图懒加载：`.task(id: file.name)` 触发，5s 超时 + 3 次重试（PTP 并发请求多时偶尔超时）
 - 每格：缩略图 + amber 勾选角标 + 时间标签（`MM/dd HH:mm`）+ 格式标签
 - GridHeaderView：标题 "候选照片"（15pt semibold）+ 计数（13pt）+ 全选/反选按钮（13pt）
-- **EXIF 日期解析**：`PhotoEnumerator.requestMetadata()` → `exifCaptureDate(from:)` 提取 `{Exif}.DateTimeOriginal`
-- **两阶段过滤**：先用 `creationDate` 粗筛（±24h），对粗筛结果拉 EXIF 精确过滤
-- `exifDates: [String: Date]` 字典存储已解析的 EXIF 日期，过滤和显示均优先使用
+- **EXIF 日期解析**：`exifCaptureDate(from:)` 提取 `{Exif}.DateTimeOriginal`（照片）/ `{TIFF}.DateTime`（视频回退）。**关键：sub-dict 必须 cast 为 `[AnyHashable: Any]`**
+- **两阶段过滤**：先用 `creationDate` 粗筛（±24h），对粗筛结果拉 EXIF 精确过滤。视频跳过 EXIF 检查，用 `creationDate`
+- **双数据结构**：`exifDates: [String: Date]`（成功日期）+ `exifFetched: Set<String>`（已请求文件）。避免 Swift `[String: Date?]` 字典赋值 nil 会删 key 的陷阱
+- **去重**：`deduplicatedByName()` 处理 DCIM 子文件夹同名文件
 
-**验收**：✅ 35 张候选照片正确过滤（排除了不同日期的干扰），缩略图懒加载流畅，勾选/取消/全选/反选均正常
+**验收**：✅ 候选照片正确过滤，缩略图懒加载流畅，勾选/取消/全选/反选均正常
 
 **实战发现（重要 bug 修复）**：
-- `ICCameraFile.creationDate` 是文件系统日期，**不是** EXIF 拍摄日期。被编辑、iCloud 同步、AirDrop 等操作会改变，导致不同日期的照片被错误纳入候选
-- `CameraFolderScanner` 递归遍历会扫到 `iPhone/` 子目录中之前导入的照片，把 TimeWindow 拉宽到跨越多天。修复：`excludingSubfolders` 参数跳过导入目标
+- `ICCameraFile.creationDate` 是文件系统日期，**不是** EXIF 拍摄日期。被编辑、iCloud 同步、AirDrop 等操作会改变
+- `CameraFolderScanner` 只扫描相机 RAW 格式（`cameraRAWExtensions`），排除 DNG/JPG/HEIC 后期导出文件（日期可能被修改）
+- PTP metadata sub-dict 是 `[AnyHashable: Any]`，cast 成 `[String: Any]` **静默失败**。这导致所有 HEIC 的 EXIF 解析失败，回退到不可靠的 `creationDate`
+- Swift `[String: Date?]` 字典的 `dict[key] = nil` 不是存 nil 值，而是删除 key。必须用独立的 `Set<String>` 追踪已请求文件
 - `.onReceive(fileCountPublisher)` 因 computed property 每次 render 创建新 publisher 实例，导致 `autoSelectAll()` 覆盖用户手动选择。修复：只在 `deviceFileCount` 从 0→N 时触发
 
 ---
@@ -708,32 +722,43 @@ enum TimeWindowResolver {
 | 1 · iPhone USB | ✅ 3/3 完成 |
 | 2 · 相机解析 | ✅ 4/4 完成 |
 | 3 · 导入引擎 | ✅ 4/4 完成 |
-| 4 · SwiftUI | ✅ 5/5 完成 |
+| 4 · SwiftUI | ✅ 5/5 完成（含选项接入 + bug 修复） |
 | 5 · 验收 | 0/3 |
 
 ### 下一步
 
 **第一个待做任务：T5.1 · 真实旅行验收**
 
-App 核心功能已全部实现并真机验证通过。下一步是用完整旅行数据跑端到端验收，记录漏选/多选指标。
+App 核心功能已全部实现并真机验证通过。Sidebar 选项已接入实际逻辑。下一步是用完整旅行数据跑端到端验收。
+
+### 已完成的功能接入（2026-05-05）
+
+- ✅ **只传送新文件**：`download(skipExisting:)` 控制跳过/覆盖
+- ✅ **保留原 EXIF 时间**：下载后 `setFileDate(url, to: exifDate)` 同步文件系统时间
+- ✅ **完成后退出**：alert 按钮变"完成并退出"，点击后 `NSApplication.shared.terminate`
+- ✅ **选项持久化**：`@AppStorage` 存储，重启保留
+- ❌ **删除 iPhone 原文件**：iOS PTP 不支持（`requestDeleteFiles` 返回 "Delete files failed"），功能已移除
+- ❌ **自动断开设备**：`requestEjectOrDisconnect` 无效果，改为"完成后退出"
+
+### 已修复的重要 bug（2026-05-05）
+
+- ✅ PTP metadata sub-dict cast：`[AnyHashable: Any]` 不是 `[String: Any]`，导致所有 HEIC 的 EXIF 解析静默失败
+- ✅ Swift `[String: Date?]` 陷阱：赋值 nil 删 key 而非存 nil。改用 `exifDates` + `exifFetched` 双数据结构
+- ✅ 相机文件夹仅扫描 RAW 格式，排除后期导出文件（DNG/JPG/HEIC）的日期污染
+- ✅ 视频文件跳过 EXIF 检查（PTP 不返回视频 EXIF），用 `creationDate`
+- ✅ 缩略图加载超时 + 重试（5s timeout + 3 retries）
+- ✅ DCIM 子文件夹重名文件去重
 
 ### 待还的技术债
 
-- Sidebar 选项 toggle（只传送新文件 / 自动断开 / 保留 EXIF / 删除原文件）目前绑定到 `@State`，**尚未接入 ImportEngine 实际逻辑**。Phase 5 需要完成 wiring
 - `device(_:didReceiveStatusInformation:)` 的 dict key 类型 warning 仍在，留作 no-op，不影响功能
 - 性能：>1000 候选照片时的 EXIF metadata 批量请求可能较慢（当前顺序请求），可改为 TaskGroup 并发
 
-### 已清理的技术债（Phase 4 中解决）
-
-- ✅ T1.3 验证 dump 缩略图代码已从 `PhotoEnumerator.reportFirstTen()` 移除
-- ✅ ContentView 临时 UI（Scan Folder 按钮 + 结果面板）已被正式 SidebarView + CandidateGridView 替换
-- ✅ `ICCameraFile.creationDate` 不可靠问题已通过 EXIF `DateTimeOriginal` 二次验证解决
-- ✅ CameraFolderScanner 递归扫描污染 TimeWindow 已通过 `excludingSubfolders` 解决
-
 ### 已知问题 / 开放问题
 
-- EXIF metadata 字典的 key 结构（`{Exif}.DateTimeOriginal`）基于 ImageIO 标准格式，在 macOS 26 上实测可用。如未来 iOS/macOS 版本改变 PTP metadata 格式需要关注
-- 首次运行时系统可能弹出"图像捕捉"权限弹窗，需用户在系统设置中批准
+- PTP metadata 格式依赖 macOS 26 行为，未来版本可能变化
+- 首次运行时系统可能弹出"图像捕捉"权限弹窗
+- 视频日期用 `creationDate`（文件系统日期），可能不如 EXIF 精确，但视频文件通常不被编辑器修改日期
 
 ### 接手 checklist
 
@@ -756,4 +781,4 @@ App 核心功能已全部实现并真机验证通过。下一步是用完整旅�
 
 ---
 
-**最后更新**：2026-05-04 by Antigravity (Phase 4 完成)
+**最后更新**：2026-05-05 by Antigravity (选项接入 + EXIF/日期 bug 修复)

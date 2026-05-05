@@ -31,7 +31,9 @@ struct CandidateGridView: View {
             } else {
                 ScrollView {
                     LazyVGrid(columns: columns, spacing: 4) {
-                        ForEach(candidates, id: \.name) { file in
+                        // Deduplicate by name (DCIM subfolders can have same-named files)
+                        let unique = deduplicatedByName(candidates)
+                        ForEach(unique, id: \.name) { file in
                             CandidateTile(
                                 file: file,
                                 isSelected: selectedNames.contains(file.name ?? ""),
@@ -55,6 +57,16 @@ struct CandidateGridView: View {
             selectedNames.remove(name)
         } else {
             selectedNames.insert(name)
+        }
+    }
+
+    /// Keep only the first file for each unique name (DCIM subfolders may have duplicates)
+    private func deduplicatedByName(_ files: [ICCameraFile]) -> [ICCameraFile] {
+        var seen = Set<String>()
+        return files.filter { file in
+            guard let name = file.name, !seen.contains(name) else { return false }
+            seen.insert(name)
+            return true
         }
     }
 }
@@ -149,11 +161,37 @@ struct CandidateTile: View {
 
     private func loadThumbnail() async {
         guard thumbnail == nil, let enumerator else { return }
-        do {
-            let img = try await ThumbnailLoader.loadThumbnail(for: file, via: enumerator)
-            thumbnail = img
-        } catch {
-            // Keep placeholder
+        // Retry up to 3 times with increasing delay for PTP transient failures
+        for attempt in 0..<3 {
+            if attempt > 0 {
+                try? await Task.sleep(for: .milliseconds(500 * attempt))
+            }
+            do {
+                let img = try await withThrowingTimeout(seconds: 5) {
+                    try await ThumbnailLoader.loadThumbnail(for: file, via: enumerator)
+                }
+                thumbnail = img
+                return
+            } catch {
+                // Retry on next iteration
+            }
+        }
+    }
+
+    /// Run an async operation with a timeout.
+    private func withThrowingTimeout<T: Sendable>(
+        seconds: Double,
+        operation: @Sendable @escaping () async throws -> T
+    ) async throws -> T {
+        try await withThrowingTaskGroup(of: T.self) { group in
+            group.addTask { try await operation() }
+            group.addTask {
+                try await Task.sleep(for: .seconds(seconds))
+                throw CancellationError()
+            }
+            let result = try await group.next()!
+            group.cancelAll()
+            return result
         }
     }
 

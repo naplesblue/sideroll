@@ -18,7 +18,8 @@ struct ContentView: View {
 
     // Candidates & selection
     @State private var selectedNames: Set<String> = []
-    @State private var exifDates: [String: Date] = [:]  // fileName → EXIF DateTimeOriginal
+    @State private var exifDates: [String: Date] = [:]   // fileName → EXIF DateTimeOriginal
+    @State private var exifFetched: Set<String> = []     // files where EXIF was attempted
 
     // Import state
     @State private var isImporting = false
@@ -28,11 +29,10 @@ struct ContentView: View {
     @State private var showImportResult = false
     @State private var importResultMessage = ""
 
-    // Preferences
-    @State private var onlyNewFiles = true
-    @State private var autoDisconnect = true
-    @State private var keepOriginalEXIF = true
-    @State private var deleteAfterImport = false
+    // Preferences (persisted via UserDefaults)
+    @AppStorage("onlyNewFiles") private var onlyNewFiles = true
+    @AppStorage("keepOriginalEXIF") private var keepOriginalEXIF = true
+    @AppStorage("autoQuit") private var autoQuit = false
 
     // Device observation
     @State private var deviceFileCount: Int = 0
@@ -48,11 +48,20 @@ struct ContentView: View {
         TimeWindowResolver.resolve(photos: cameraPhotos, buffer: buffer)
     }
 
-    /// Resolve the best date for an iPhone photo: EXIF DateTimeOriginal > creationDate
+    /// Resolve the best date for an iPhone photo.
+    /// - EXIF fetched + date found → use EXIF date
+    /// - EXIF fetched + date NOT found → nil (exclude from candidates)
+    /// - EXIF not yet fetched → use creationDate (pre-EXIF rough display)
     private func resolvedDate(for file: ICCameraFile) -> Date? {
-        if let name = file.name, let exifDate = exifDates[name] {
+        guard let name = file.name else { return file.creationDate }
+        if let exifDate = exifDates[name] {
             return exifDate
         }
+        if exifFetched.contains(name) {
+            // EXIF was fetched but DateTimeOriginal not found — exclude
+            return nil
+        }
+        // Not yet fetched — fall back to creationDate
         return file.creationDate
     }
 
@@ -89,9 +98,8 @@ struct ContentView: View {
                     subfolderName: $subfolderName,
                     timeWindow: timeWindow,
                     onlyNewFiles: $onlyNewFiles,
-                    autoDisconnect: $autoDisconnect,
-                    keepOriginalEXIF: $keepOriginalEXIF,
-                    deleteAfterImport: $deleteAfterImport
+                    autoQuit: $autoQuit,
+                    keepOriginalEXIF: $keepOriginalEXIF
                 )
                 .frame(minWidth: 200, idealWidth: 220, maxWidth: 260)
 
@@ -147,7 +155,11 @@ struct ContentView: View {
         }
         .onChange(of: buffer) { _, _ in autoSelectAll() }
         .alert("传送完成", isPresented: $showImportResult) {
-            Button("完成") { }
+            Button(autoQuit ? "完成并退出" : "完成") {
+                if autoQuit {
+                    NSApplication.shared.terminate(nil)
+                }
+            }
         } message: {
             Text(importResultMessage)
         }
@@ -172,32 +184,34 @@ struct ContentView: View {
         guard !roughCandidates.isEmpty else { return }
         print("[EXIF] Fetching metadata for \(roughCandidates.count) rough candidates…")
 
+        let videoExts: Set<String> = ["mov", "mp4", "m4v"]
         Task {
-            var resolved: [String: Date] = [:]
+            var dates = exifDates
+            var fetched = exifFetched
             for file in roughCandidates {
                 guard let name = file.name else { continue }
-                // Skip if already resolved
-                guard exifDates[name] == nil else {
-                    resolved[name] = exifDates[name]
-                    continue
-                }
+                // Skip if already attempted
+                guard !fetched.contains(name) else { continue }
+                // Videos: skip EXIF fetch, use creationDate (reliable for unedited videos)
+                let ext = (name as NSString).pathExtension.lowercased()
+                if videoExts.contains(ext) { continue }
+                fetched.insert(name)
                 do {
                     let metadata = try await enumerator.requestMetadata(for: file)
                     if let exifDate = PhotoEnumerator.exifCaptureDate(from: metadata) {
-                        resolved[name] = exifDate
+                        dates[name] = exifDate
                     } else {
-                        // No EXIF date found, fall back to creationDate
-                        resolved[name] = file.creationDate
+                        print("[EXIF] No DateTimeOriginal for \(name)")
                     }
                 } catch {
-                    // Metadata request failed, keep creationDate
-                    resolved[name] = file.creationDate
+                    print("[EXIF] Metadata failed for \(name): \(error.localizedDescription)")
                 }
             }
-            exifDates = resolved
+            exifDates = dates
+            exifFetched = fetched
             // Re-select after EXIF dates refine the candidate list
             autoSelectAll()
-            print("[EXIF] Resolved \(resolved.count) dates")
+            print("[EXIF] Resolved \(dates.count) dates, \(fetched.count) fetched")
         }
     }
 
@@ -207,6 +221,12 @@ struct ContentView: View {
         let destFolder = folder.appendingPathComponent(destName, isDirectory: true)
         let filesToImport = selectedFiles
         guard !filesToImport.isEmpty else { return }
+
+        // Capture option values before entering async context
+        let skipExisting = onlyNewFiles
+        let preserveEXIF = keepOriginalEXIF
+        let quitAfter = autoQuit
+        let resolvedDates = exifDates
 
         let engine = ImportEngine(device: enumerator.device)
         isImporting = true
@@ -228,10 +248,17 @@ struct ContentView: View {
                 importProgressText = "[\(i + 1)/\(total)] \(file.name ?? "?")"
 
                 do {
-                    let result = try await engine.download(file: file, to: destFolder)
+                    let result = try await engine.download(file: file, to: destFolder, skipExisting: skipExisting)
                     switch result {
-                    case .downloaded: downloaded += 1
-                    case .skipped: skipped += 1
+                    case .downloaded(let url):
+                        downloaded += 1
+                        // Set file dates to EXIF capture time
+                        if preserveEXIF, let name = file.name,
+                           let exifDate = resolvedDates[name] {
+                            engine.setFileDate(url, to: exifDate)
+                        }
+                    case .skipped:
+                        skipped += 1
                     }
                 } catch {
                     failed += 1

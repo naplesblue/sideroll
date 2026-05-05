@@ -24,17 +24,23 @@ final class ImportEngine: NSObject {
         case skipped(URL)  // file already exists at destination
     }
 
-    /// Download one file to `folder`, returning `.skipped` if a file with the
-    /// same name already exists (T3.3 idempotency — never overwrites).
-    func download(file: ICCameraFile, to folder: URL) async throws -> DownloadResult {
+    /// Download one file to `folder`.
+    /// - `skipExisting`: if true (default), returns `.skipped` when file already exists.
+    ///   If false, overwrites existing file.
+    func download(file: ICCameraFile, to folder: URL, skipExisting: Bool = true) async throws -> DownloadResult {
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
 
         let saveName = file.name ?? "untitled"
         let targetURL = folder.appendingPathComponent(saveName)
 
-        // T3.3: Idempotent — never overwrite existing files
-        if FileManager.default.fileExists(atPath: targetURL.path) {
+        // T3.3: Idempotent — skip if file exists and skipExisting is on
+        if skipExisting && FileManager.default.fileExists(atPath: targetURL.path) {
             return .skipped(targetURL)
+        }
+
+        // Remove existing file if overwriting
+        if !skipExisting && FileManager.default.fileExists(atPath: targetURL.path) {
+            try FileManager.default.removeItem(at: targetURL)
         }
 
         let url: URL = try await withCheckedThrowingContinuation { cont in
@@ -59,6 +65,25 @@ final class ImportEngine: NSObject {
             )
         }
         return .downloaded(url)
+    }
+
+    /// Set the file's creation & modification dates to match the EXIF capture time.
+    func setFileDate(_ url: URL, to date: Date) {
+        do {
+            try FileManager.default.setAttributes([
+                .creationDate: date,
+                .modificationDate: date,
+            ], ofItemAtPath: url.path)
+        } catch {
+            print("[ImportEngine] Failed to set file date: \(error)")
+        }
+    }
+
+    /// Request deletion of files from the connected iPhone.
+    func deleteFiles(_ files: [ICCameraItem]) {
+        guard !files.isEmpty else { return }
+        device.requestDeleteFiles(files)
+        print("[ImportEngine] Requested deletion of \(files.count) files from device")
     }
 
     // MARK: - Batch download (T3.4)

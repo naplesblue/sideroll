@@ -7,9 +7,17 @@ import Foundation
 import ImageIO
 
 enum CameraFolderScanner {
+    /// Camera vendor-specific RAW formats — ONLY these are used for TimeWindow
+    /// calculation. DNG/JPG/HEIC are excluded because they may be post-processing
+    /// exports with modified EXIF dates.
+    nonisolated static let cameraRAWExtensions: Set<String> = [
+        "nef", "cr2", "cr3", "arw", "raf", "orf", "rw2",
+    ]
+
+    /// All image formats we can scan (for display/info purposes)
     nonisolated static let supportedExtensions: Set<String> = [
-        "jpg", "jpeg", "heic", "heif",
-        "nef", "cr2", "cr3", "arw", "raf", "dng", "orf", "rw2",
+        "jpg", "jpeg", "heic", "heif", "dng",
+        "nef", "cr2", "cr3", "arw", "raf", "orf", "rw2",
     ]
 
     nonisolated static func scan(folder: URL, excludingSubfolders: [String] = ["iPhone"]) async throws -> [CameraPhoto] {
@@ -41,7 +49,8 @@ enum CameraFolderScanner {
             }
 
             let ext = url.pathExtension.lowercased()
-            guard supportedExtensions.contains(ext) else { continue }
+            // Only camera vendor RAW formats for TimeWindow calculation
+            guard cameraRAWExtensions.contains(ext) else { continue }
 
             let values = try? url.resourceValues(forKeys: [.isRegularFileKey])
             guard values?.isRegularFile == true else { continue }
