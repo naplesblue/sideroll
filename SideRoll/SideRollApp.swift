@@ -24,6 +24,9 @@ struct SideRollApp: App {
                 }
                 .onReceive(deviceBrowser.$connectedDevice) { device in
                     if let device {
+                        // Don't re-create enumerator if already connected to same device
+                        if enumerator?.device === device { return }
+                        enumerator?.stop()
                         let new = PhotoEnumerator(device: device)
                         new.start()
                         self.enumerator = new

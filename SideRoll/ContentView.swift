@@ -39,6 +39,11 @@ struct ContentView: View {
     @State private var deviceFileCount: Int = 0
     @State private var thumbnailSize: CGFloat = 110
 
+    // Preview
+    @State private var previewImage: NSImage?
+    @State private var previewLoading = false
+    @State private var previewEngine: ImportEngine?
+
     private var fileCountPublisher: AnyPublisher<Int, Never> {
         if let enumerator {
             return enumerator.$totalCount.eraseToAnyPublisher()
@@ -67,11 +72,35 @@ struct ContentView: View {
         return file.creationDate
     }
 
+    private static let dngPairedExts: Set<String> = ["jpg", "jpeg", "heic", "heif"]
+
     private var candidates: [ICCameraFile] {
         guard let window = timeWindow, let enumerator else { return [] }
-        return enumerator.availableFiles.filter { file in
+        let inWindow = enumerator.availableFiles.filter { file in
             guard let date = resolvedDate(for: file) else { return false }
             return date >= window.start && date <= window.end
+        }
+        // Hide JPG/HEIC when a DNG with same basename exists (iPhone ProRAW pairs)
+        let dngBasenames = Set(inWindow.compactMap { file -> String? in
+            guard let name = file.name,
+                  (name as NSString).pathExtension.lowercased() == "dng" else { return nil }
+            return (name as NSString).deletingPathExtension
+        })
+        guard !dngBasenames.isEmpty else { return inWindow }
+        return inWindow.filter { file in
+            guard let name = file.name else { return true }
+            let ext = (name as NSString).pathExtension.lowercased()
+            if Self.dngPairedExts.contains(ext) {
+                let base = (name as NSString).deletingPathExtension
+                if dngBasenames.contains(base) { return false }
+                // E-prefix match: IMG_E1908.JPG → IMG_1908
+                if base.contains("_E"),
+                   let range = base.range(of: "_E", options: .backwards) {
+                    let stripped = base.replacingCharacters(in: range, with: "_")
+                    if dngBasenames.contains(stripped) { return false }
+                }
+            }
+            return true
         }
     }
 
@@ -89,7 +118,7 @@ struct ContentView: View {
             // Top device bar
             DeviceBar(enumerator: enumerator, deviceFileCount: deviceFileCount)
 
-            Divider().overlay(Color("Accent", bundle: nil).opacity(0.3))
+            Divider().overlay(Color.amber.opacity(0.3))
 
             // Main content: sidebar + grid
             HSplitView {
@@ -140,7 +169,8 @@ struct ContentView: View {
                         exifDates: exifDates,
                         existingFiles: existingFiles,
                         onlyNewFiles: onlyNewFiles,
-                        thumbnailSize: thumbnailSize
+                        thumbnailSize: thumbnailSize,
+                        onPreview: { file in previewFile(file) }
                     )
                 }
             }
@@ -159,6 +189,53 @@ struct ContentView: View {
             )
         }
         .background(Color(nsColor: .windowBackgroundColor))
+        .overlay {
+            // Full-resolution preview overlay (lightbox style)
+            if previewImage != nil || previewLoading {
+                ZStack {
+                    Color.black.opacity(0.85)
+
+                    if let previewImage {
+                        Image(nsImage: previewImage)
+                            .resizable()
+                            .aspectRatio(contentMode: .fit)
+                            .padding(40)
+                    } else {
+                        ProgressView("正在加载原图…")
+                            .foregroundStyle(.white)
+                    }
+
+                    // Close button — top right
+                    VStack {
+                        HStack {
+                            Spacer()
+                            Button {
+                                dismissPreview()
+                            } label: {
+                                Image(systemName: "xmark.circle.fill")
+                                    .font(.system(size: 24))
+                                    .foregroundStyle(.white.opacity(0.7))
+                            }
+                            .buttonStyle(.plain)
+                            .padding(12)
+                        }
+                        Spacer()
+                    }
+
+                    // Hint text at bottom
+                    VStack {
+                        Spacer()
+                        Text("点击任意位置或按 ESC 关闭")
+                            .font(.system(size: 12))
+                            .foregroundStyle(.white.opacity(0.4))
+                            .padding(.bottom, 16)
+                    }
+                }
+                .contentShape(Rectangle())
+                .onTapGesture { dismissPreview() }
+                .onKeyPress(.escape) { dismissPreview(); return .handled }
+            }
+        }
         .frame(minWidth: 900, minHeight: 640)
         .onReceive(fileCountPublisher) { count in
             let oldCount = deviceFileCount
@@ -187,6 +264,11 @@ struct ContentView: View {
         }
     }
 
+    private func dismissPreview() {
+        previewImage = nil
+        previewLoading = false
+    }
+
     private func autoSelectAll() {
         if onlyNewFiles {
             // Only select candidates not already in target folder
@@ -210,6 +292,37 @@ struct ContentView: View {
             return
         }
         existingFiles = Set(contents.map { $0.lastPathComponent })
+    }
+
+    /// Download the full-resolution image to a temp directory and show in preview overlay.
+    private func previewFile(_ file: ICCameraFile) {
+        guard let enumerator, !previewLoading else { return }
+        previewLoading = true
+        previewImage = nil
+
+        // Hold engine reference in @State so it survives the PTP download callback
+        let engine = ImportEngine(device: enumerator.device)
+        previewEngine = engine
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("SideRollPreview", isDirectory: true)
+
+        Task {
+            do {
+                let result = try await engine.download(file: file, to: tempDir, skipExisting: false)
+                if case .downloaded(let url) = result {
+                    if let image = NSImage(contentsOf: url) {
+                        previewImage = image
+                    }
+                    try? FileManager.default.removeItem(at: url)
+                }
+            } catch {
+                print("[Preview] Failed: \(error.localizedDescription)")
+            }
+            previewEngine = nil
+            if previewImage == nil {
+                previewLoading = false
+            }
+        }
     }
 
     /// Fetch EXIF DateTimeOriginal for iPhone photos whose creationDate falls

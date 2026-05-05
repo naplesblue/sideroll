@@ -14,6 +14,7 @@ struct CandidateGridView: View {
     var existingFiles: Set<String>
     var onlyNewFiles: Bool
     var thumbnailSize: CGFloat
+    var onPreview: ((ICCameraFile) -> Void)?
 
     private var columns: [GridItem] {
         [GridItem(.adaptive(minimum: thumbnailSize, maximum: thumbnailSize + 40))]
@@ -38,16 +39,20 @@ struct CandidateGridView: View {
                     LazyVGrid(columns: columns, spacing: 4) {
                         // Deduplicate by name (DCIM subfolders can have same-named files)
                         let unique = deduplicatedByName(candidates)
+                        let pairMap = basenameMap(unique)
                         ForEach(unique, id: \.name) { file in
                             let alreadyImported = existingFiles.contains(file.name ?? "")
                             CandidateTile(
                                 file: file,
                                 isSelected: selectedNames.contains(file.name ?? ""),
                                 isDimmed: onlyNewFiles && alreadyImported,
+                                thumbnailFallback: thumbnailFallbackFile(for: file, in: pairMap),
                                 enumerator: enumerator,
                                 exifDates: exifDates
                             ) {
                                 toggleSelection(file)
+                            } onPreview: {
+                                onPreview?(file)
                             }
                         }
                     }
@@ -76,15 +81,60 @@ struct CandidateGridView: View {
             return true
         }
     }
+
+    /// Group files by basename for DNG→JPG/HEIC thumbnail fallback.
+    private func basenameMap(_ files: [ICCameraFile]) -> [String: [ICCameraFile]] {
+        var map: [String: [ICCameraFile]] = [:]
+        for file in files {
+            guard let name = file.name else { continue }
+            let base = (name as NSString).deletingPathExtension
+            map[base, default: []].append(file)
+        }
+        return map
+    }
+
+    /// For a DNG file, find a paired JPG/HEIC to borrow its thumbnail.
+    private static let rawExts: Set<String> = ["dng"]
+    private static let imageExts: Set<String> = ["jpg", "jpeg", "heic", "heif"]
+
+    private func thumbnailFallbackFile(for file: ICCameraFile, in map: [String: [ICCameraFile]]) -> ICCameraFile? {
+        guard let name = file.name else { return nil }
+        let ext = (name as NSString).pathExtension.lowercased()
+        guard Self.rawExts.contains(ext) else { return nil }
+        let base = (name as NSString).deletingPathExtension
+
+        // Try direct match first (IMG_1908 → IMG_1908.JPG)
+        if let match = map[base]?.first(where: { sibling in
+            guard let n = sibling.name, sibling !== file else { return false }
+            return Self.imageExts.contains((n as NSString).pathExtension.lowercased())
+        }) {
+            return match
+        }
+
+        // Try E-prefix variant (IMG_1908 → IMG_E1908.JPG)
+        if let uRange = base.range(of: "_", options: .backwards) {
+            let eBase = base.replacingCharacters(in: uRange, with: "_E")
+            if let match = map[eBase]?.first(where: { sibling in
+                guard let n = sibling.name else { return false }
+                return Self.imageExts.contains((n as NSString).pathExtension.lowercased())
+            }) {
+                return match
+            }
+        }
+
+        return nil
+    }
 }
 
 struct CandidateTile: View {
     let file: ICCameraFile
     let isSelected: Bool
     var isDimmed: Bool = false
+    var thumbnailFallback: ICCameraFile?  // paired JPG/HEIC for DNG thumbnail
     var enumerator: PhotoEnumerator?
     var exifDates: [String: Date]
     let onToggle: () -> Void
+    var onPreview: () -> Void = {}
 
     @State private var thumbnail: NSImage?
 
@@ -140,7 +190,8 @@ struct CandidateTile: View {
             .background(Color.black.opacity(0.3))
             .cornerRadius(4)
             .contentShape(Rectangle())
-            .onTapGesture { onToggle() }
+            .onTapGesture(count: 2) { onPreview() }
+            .onTapGesture(count: 1) { onToggle() }
 
             // Info row: time + format
             HStack {
@@ -169,19 +220,22 @@ struct CandidateTile: View {
 
     private func loadThumbnail() async {
         guard thumbnail == nil, let enumerator else { return }
-        // Retry up to 3 times with increasing delay for PTP transient failures
-        for attempt in 0..<3 {
-            if attempt > 0 {
-                try? await Task.sleep(for: .milliseconds(500 * attempt))
-            }
-            do {
-                let img = try await withThrowingTimeout(seconds: 5) {
-                    try await ThumbnailLoader.loadThumbnail(for: file, via: enumerator)
+        // Try the file itself first, then fall back to paired image (DNG→JPG/HEIC)
+        let filesToTry = [file] + (thumbnailFallback.map { [$0] } ?? [])
+        for target in filesToTry {
+            for attempt in 0..<3 {
+                if attempt > 0 {
+                    try? await Task.sleep(for: .milliseconds(500 * attempt))
                 }
-                thumbnail = img
-                return
-            } catch {
-                // Retry on next iteration
+                do {
+                    let img = try await withThrowingTimeout(seconds: 5) {
+                        try await ThumbnailLoader.loadThumbnail(for: target, via: enumerator)
+                    }
+                    thumbnail = img
+                    return
+                } catch {
+                    // Retry on next iteration
+                }
             }
         }
     }

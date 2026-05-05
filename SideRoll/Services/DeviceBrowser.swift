@@ -22,7 +22,11 @@ final class DeviceBrowser: NSObject, ObservableObject {
         )!
     }
 
+    private var isStarted = false
+
     func start() {
+        guard !isStarted else { return }
+        isStarted = true
         print("[DeviceBrowser] starting…")
         browser.start()
     }
