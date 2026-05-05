@@ -13,8 +13,11 @@ struct CandidateGridView: View {
     var exifDates: [String: Date]
     var existingFiles: Set<String>
     var onlyNewFiles: Bool
+    var thumbnailSize: CGFloat
 
-    private let columns = [GridItem(.adaptive(minimum: 110, maximum: 150))]
+    private var columns: [GridItem] {
+        [GridItem(.adaptive(minimum: thumbnailSize, maximum: thumbnailSize + 40))]
+    }
 
     var body: some View {
         Group {
@@ -107,9 +110,7 @@ struct CandidateTile: View {
                 if let thumbnail {
                     Image(nsImage: thumbnail)
                         .resizable()
-                        .aspectRatio(contentMode: .fill)
-                        .frame(minWidth: 100, minHeight: 80)
-                        .clipped()
+                        .aspectRatio(contentMode: .fit)
                 } else {
                     // Striped placeholder
                     Rectangle()
@@ -136,6 +137,7 @@ struct CandidateTile: View {
                 }
             }
             .aspectRatio(4/3, contentMode: .fit)
+            .background(Color.black.opacity(0.3))
             .cornerRadius(4)
             .contentShape(Rectangle())
             .onTapGesture { onToggle() }

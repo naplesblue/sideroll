@@ -37,6 +37,7 @@ struct ContentView: View {
 
     // Device observation
     @State private var deviceFileCount: Int = 0
+    @State private var thumbnailSize: CGFloat = 110
 
     private var fileCountPublisher: AnyPublisher<Int, Never> {
         if let enumerator {
@@ -116,6 +117,20 @@ struct ContentView: View {
                         }
                     )
 
+                    // Thumbnail size slider
+                    HStack(spacing: 6) {
+                        Image(systemName: "photo")
+                            .font(.system(size: 9))
+                            .foregroundStyle(.secondary)
+                        Slider(value: $thumbnailSize, in: 70...220, step: 10)
+                            .controlSize(.mini)
+                        Image(systemName: "photo")
+                            .font(.system(size: 14))
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 4)
+
                     Divider()
 
                     CandidateGridView(
@@ -124,7 +139,8 @@ struct ContentView: View {
                         enumerator: enumerator,
                         exifDates: exifDates,
                         existingFiles: existingFiles,
-                        onlyNewFiles: onlyNewFiles
+                        onlyNewFiles: onlyNewFiles,
+                        thumbnailSize: thumbnailSize
                     )
                 }
             }
