@@ -39,7 +39,9 @@ struct CandidateGridView: View {
                     LazyVGrid(columns: columns, spacing: 4) {
                         // Deduplicate by name (DCIM subfolders can have same-named files)
                         let unique = deduplicatedByName(candidates)
-                        let pairMap = basenameMap(unique)
+                        // Build fallback map from ALL device files (not just candidates,
+                        // since paired JPGs may have been filtered out by ProRAW dedup)
+                        let pairMap = basenameMap(enumerator?.availableFiles ?? candidates)
                         ForEach(unique, id: \.name) { file in
                             let alreadyImported = existingFiles.contains(file.name ?? "")
                             CandidateTile(
