@@ -56,6 +56,7 @@ rm -f "$DMG_PATH"
 # Use create-dmg for professional DMG with icon layout
 create-dmg \
     --volname "SideRoll" \
+    --background "assets/dmg-background.png" \
     --window-pos 200 120 \
     --window-size 600 400 \
     --icon-size 128 \
