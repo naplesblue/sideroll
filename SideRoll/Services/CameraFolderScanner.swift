@@ -37,10 +37,9 @@ enum CameraFolderScanner {
         "x3f",
     ]
 
-    /// All image formats we can scan (for display/info purposes)
-    nonisolated static let supportedExtensions: Set<String> = [
-        "jpg", "jpeg", "heic", "heif", "dng", "tif", "tiff",
-    ].union(cameraRAWExtensions)
+    nonisolated static let supportedExtensions: Set<String> =
+        Set(["jpg", "jpeg", "heic", "heif", "dng", "tif", "tiff"])
+            .union(cameraRAWExtensions)
 
     nonisolated static func scan(folder: URL, excludingSubfolders: [String] = ["iPhone"]) async throws -> [CameraPhoto] {
         try await Task.detached(priority: .userInitiated) {
