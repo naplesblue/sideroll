@@ -27,21 +27,61 @@ enum CameraFolderScanner {
     }
 
     nonisolated private static func scanSync(folder: URL, excludingSubfolders: [String]) throws -> [CameraPhoto] {
+        // Primary: scan for camera vendor RAW files (recursive)
+        let rawResults = try scanFiles(
+            folder: folder,
+            extensions: cameraRAWExtensions,
+            excludingSubfolders: excludingSubfolders,
+            recursive: true
+        )
+        if !rawResults.isEmpty {
+            return rawResults
+        }
+
+        // Fallback: no RAW found — scan top-level image files (JPG/HEIC/DNG etc.)
+        print("[CameraFolderScanner] No RAW files found, falling back to top-level images")
+        let fallbackExts: Set<String> = ["jpg", "jpeg", "heic", "heif", "dng", "tif", "tiff"]
+        return try scanFiles(
+            folder: folder,
+            extensions: fallbackExts,
+            excludingSubfolders: excludingSubfolders,
+            recursive: false
+        )
+    }
+
+    nonisolated private static func scanFiles(
+        folder: URL,
+        extensions: Set<String>,
+        excludingSubfolders: [String],
+        recursive: Bool
+    ) throws -> [CameraPhoto] {
         let fm = FileManager.default
-        guard let enumerator = fm.enumerator(
-            at: folder,
-            includingPropertiesForKeys: [.isRegularFileKey, .nameKey],
-            options: [.skipsHiddenFiles, .skipsPackageDescendants]
-        ) else {
-            throw ScannerError.cannotEnumerate(folder)
+
+        let urls: [URL]
+        if recursive {
+            guard let enumerator = fm.enumerator(
+                at: folder,
+                includingPropertiesForKeys: [.isRegularFileKey, .nameKey],
+                options: [.skipsHiddenFiles, .skipsPackageDescendants]
+            ) else {
+                throw ScannerError.cannotEnumerate(folder)
+            }
+            urls = enumerator.compactMap { $0 as? URL }
+        } else {
+            // Top-level only — no recursion
+            urls = (try? fm.contentsOfDirectory(
+                at: folder,
+                includingPropertiesForKeys: [.isRegularFileKey],
+                options: [.skipsHiddenFiles]
+            )) ?? []
         }
 
         let formatter = exifDateFormatter()
         var results: [CameraPhoto] = []
         var skipped = 0
 
-        for case let url as URL in enumerator {
-            // Skip files inside excluded subdirectories (e.g. iPhone/ from previous imports)
+        for url in urls {
+            // Skip files inside excluded subdirectories
             let relative = url.path.replacingOccurrences(of: folder.path + "/", with: "")
             let topDir = relative.components(separatedBy: "/").first ?? ""
             if excludingSubfolders.contains(where: { $0.caseInsensitiveCompare(topDir) == .orderedSame }) {
@@ -49,8 +89,7 @@ enum CameraFolderScanner {
             }
 
             let ext = url.pathExtension.lowercased()
-            // Only camera vendor RAW formats for TimeWindow calculation
-            guard cameraRAWExtensions.contains(ext) else { continue }
+            guard extensions.contains(ext) else { continue }
 
             let values = try? url.resourceValues(forKeys: [.isRegularFileKey])
             guard values?.isRegularFile == true else { continue }
