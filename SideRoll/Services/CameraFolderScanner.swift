@@ -11,14 +11,36 @@ enum CameraFolderScanner {
     /// calculation. DNG/JPG/HEIC are excluded because they may be post-processing
     /// exports with modified EXIF dates.
     nonisolated static let cameraRAWExtensions: Set<String> = [
-        "nef", "cr2", "cr3", "arw", "raf", "orf", "rw2",
+        // Nikon
+        "nef", "nrw",
+        // Canon
+        "cr2", "cr3", "crw",
+        // Sony
+        "arw", "srf", "sr2",
+        // Fujifilm
+        "raf",
+        // Olympus / OM System
+        "orf",
+        // Panasonic
+        "rw2",
+        // Pentax (newer models output DNG natively — handled by fallback scan)
+        "pef",
+        // Leica
+        "rwl",
+        // Hasselblad
+        "3fr", "fff",
+        // Phase One
+        "iiq",
+        // Samsung
+        "srw",
+        // Sigma
+        "x3f",
     ]
 
     /// All image formats we can scan (for display/info purposes)
     nonisolated static let supportedExtensions: Set<String> = [
-        "jpg", "jpeg", "heic", "heif", "dng",
-        "nef", "cr2", "cr3", "arw", "raf", "orf", "rw2",
-    ]
+        "jpg", "jpeg", "heic", "heif", "dng", "tif", "tiff",
+    ].union(cameraRAWExtensions)
 
     nonisolated static func scan(folder: URL, excludingSubfolders: [String] = ["iPhone"]) async throws -> [CameraPhoto] {
         try await Task.detached(priority: .userInitiated) {

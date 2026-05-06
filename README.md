@@ -32,7 +32,7 @@ SideRoll is a macOS utility for photographers who shoot with a camera and use th
 
 ## Supported Camera RAW Formats
 
-NEF (Nikon) · CR2/CR3 (Canon) · ARW (Sony) · RAF (Fujifilm) · ORF (Olympus) · RW2 (Panasonic)
+NEF/NRW (Nikon) · CR2/CR3/CRW (Canon) · ARW/SRF/SR2 (Sony) · RAF (Fujifilm) · ORF (Olympus/OM System) · RW2 (Panasonic) · PEF (Pentax) · RWL (Leica) · 3FR/FFF (Hasselblad) · IIQ (Phase One) · SRW (Samsung) · X3F (Sigma)
 
 Fallback: JPG, HEIC, DNG, TIFF (when no RAW files found)
 
