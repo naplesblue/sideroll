@@ -1,5 +1,7 @@
 # SideRoll
 
+**English** | [中文](README_zh.md)
+
 **Import iPhone photos into your camera trip folders — automatically matched by shooting time.**
 
 SideRoll is a macOS utility for photographers who shoot with a camera and use their iPhone as a supplement. After a trip, it finds iPhone photos that were taken during the same time period as your camera shots and copies them into the camera folder, saving you from manually digging through Photos.app.

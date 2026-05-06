@@ -69,7 +69,8 @@ struct DeviceBar: View {
                 }
             }
             .pickerStyle(.segmented)
-            .frame(width: 64)
+            .controlSize(.mini)
+            .frame(width: 56)
         }
         .font(.callout)
         .padding(.horizontal, 16)
