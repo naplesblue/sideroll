@@ -1,6 +1,6 @@
 # SideRoll
 
-[English](README.md) | **中文**
+**English** | [中文](README.md)
 
 **把旅行期间用 iPhone 拍的照片，自动归档到相机文件夹 —— 按拍摄时间智能匹配。**
 
@@ -42,7 +42,7 @@ NEF/NRW (Nikon) · CR2/CR3/CRW (Canon) · ARW/SRF/SR2 (Sony) · RAF (Fujifilm) �
 ### 从源码编译
 
 ```bash
-git clone https://github.com/your-username/SideRoll.git
+git clone https://github.com/naplesblue/sideroll.git
 cd SideRoll
 xcodebuild build -scheme SideRoll -configuration Release -destination 'platform=macOS'
 ```
@@ -51,7 +51,7 @@ xcodebuild build -scheme SideRoll -configuration Release -destination 'platform=
 
 ### 下载预编译版本
 
-从 [Releases](https://github.com/your-username/SideRoll/releases) 页面下载最新版本。
+从 [Releases](https://github.com/naplesblue/sideroll/releases) 页面下载最新版本。
 
 ## 使用提示
 
