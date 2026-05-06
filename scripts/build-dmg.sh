@@ -57,11 +57,21 @@ codesign --verify --verbose=2 "$APP_PATH"
 echo "→ Creating $DMG_PATH"
 mkdir -p "$DMG_DIR"
 rm -f "$DMG_PATH"
+
+# Stage DMG contents: SideRoll.app + Applications shortcut
+STAGE_DIR="$BUILD_DIR/dmg-stage"
+rm -rf "$STAGE_DIR"
+mkdir -p "$STAGE_DIR"
+cp -R "$APP_PATH" "$STAGE_DIR/"
+ln -s /Applications "$STAGE_DIR/Applications"
+
 hdiutil create \
     -volname "SideRoll" \
-    -srcfolder "$APP_PATH" \
+    -srcfolder "$STAGE_DIR" \
     -ov -format UDZO \
     "$DMG_PATH" > /dev/null
+
+rm -rf "$STAGE_DIR"
 
 SIZE=$(du -h "$DMG_PATH" | cut -f1)
 SHA=$(shasum -a 256 "$DMG_PATH" | cut -d' ' -f1)
