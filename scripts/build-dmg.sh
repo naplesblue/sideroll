@@ -9,12 +9,7 @@
 #   dist/SideRoll-<version>.dmg
 #   SHA256 of the DMG (stdout)
 #
-# Notes:
-# - Ad-hoc signed (no Apple Developer ID required). First-time users will need
-#   to right-click → Open to bypass Gatekeeper, OR run:
-#     xattr -dr com.apple.quarantine /Applications/SideRoll.app
-# - For Gatekeeper-friendly distribution, enroll in Apple Developer Program
-#   ($99/yr) and replace the codesign step with a Developer ID certificate.
+# Requires: create-dmg (brew install create-dmg)
 
 set -euo pipefail
 
@@ -58,20 +53,28 @@ echo "→ Creating $DMG_PATH"
 mkdir -p "$DMG_DIR"
 rm -f "$DMG_PATH"
 
-# Stage DMG contents: SideRoll.app + Applications shortcut
-STAGE_DIR="$BUILD_DIR/dmg-stage"
-rm -rf "$STAGE_DIR"
-mkdir -p "$STAGE_DIR"
-cp -R "$APP_PATH" "$STAGE_DIR/"
-ln -s /Applications "$STAGE_DIR/Applications"
-
-hdiutil create \
-    -volname "SideRoll" \
-    -srcfolder "$STAGE_DIR" \
-    -ov -format UDZO \
-    "$DMG_PATH" > /dev/null
-
-rm -rf "$STAGE_DIR"
+# Use create-dmg for professional DMG with icon layout
+create-dmg \
+    --volname "SideRoll" \
+    --window-pos 200 120 \
+    --window-size 600 400 \
+    --icon-size 128 \
+    --icon "SideRoll.app" 160 190 \
+    --app-drop-link 440 190 \
+    --hide-extension "SideRoll.app" \
+    --no-internet-enable \
+    "$DMG_PATH" \
+    "$APP_PATH" \
+    || {
+        # create-dmg returns 2 when it can't set custom icon (CI/headless)
+        # but DMG is still created successfully
+        if [ -f "$DMG_PATH" ]; then
+            echo "⚠ create-dmg exited non-zero but DMG was created (likely headless mode)"
+        else
+            echo "✗ create-dmg failed"
+            exit 1
+        fi
+    }
 
 SIZE=$(du -h "$DMG_PATH" | cut -f1)
 SHA=$(shasum -a 256 "$DMG_PATH" | cut -d' ' -f1)

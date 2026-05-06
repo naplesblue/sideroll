@@ -21,6 +21,9 @@ jobs:
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "Building release ${VERSION}"
 
+      - name: Install create-dmg
+        run: brew install create-dmg
+
       - name: Build DMG
         run: scripts/build-dmg.sh "${{ steps.version.outputs.version }}"
 
