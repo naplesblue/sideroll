@@ -69,9 +69,26 @@ xcodebuild build -scheme SideRoll -configuration Release -destination 'platform=
 
 从 [Releases](https://github.com/naplesblue/sideroll/releases) 页面下载最新版本。
 
+### 首次启动
+
+由于 SideRoll 未经 Apple 开发者签名，macOS Gatekeeper 会阻止直接打开。以下两种方式任选其一：
+
+**方式一：右键打开（推荐）**
+
+1. 打开 Finder，进入 `应用程序` 文件夹（或 DMG 拖入后的位置）
+2. **右键点击** SideRoll.app → 选择 **打开**
+3. 弹窗中点击 **打开** 即可（仅首次需要，之后可正常双击启动）
+
+**方式二：终端移除隔离属性**
+
+```bash
+xattr -dr com.apple.quarantine /Applications/SideRoll.app
+```
+
+执行后即可正常双击启动，无需再次确认。
+
 ## 使用提示
 
-- **首次启动**：macOS 可能要求右键 → 打开以绕过 Gatekeeper
 - **iPhone 不显示？** 确保已解锁屏幕，并在 iPhone 弹窗中点击"信任"
 - **调整缓冲**：侧边栏滑块可放大/缩小时间窗口。±2 小时适合一日游；多日行程可适当增大
 - **子文件夹名称**：侧边栏可编辑，默认为 `iPhone`
