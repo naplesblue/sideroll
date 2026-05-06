@@ -6,8 +6,16 @@
 import SwiftUI
 import AppKit
 
+/// Quit the app when the last window is closed (red X = Cmd+Q).
+class AppDelegate: NSObject, NSApplicationDelegate {
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+        true
+    }
+}
+
 @main
 struct SideRollApp: App {
+    @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
     @StateObject private var deviceBrowser = DeviceBrowser()
     @State private var enumerator: PhotoEnumerator?
 
