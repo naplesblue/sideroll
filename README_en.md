@@ -1,6 +1,30 @@
-# SideRoll
+<!-- TODO: body is still in Chinese — needs translation pass -->
 
-**English** | [中文](README.md)
+<p align="center">
+  <img src="assets/icon.png" width="128" alt="SideRoll" />
+</p>
+
+<h1 align="center">SideRoll</h1>
+
+<p align="center">
+  <strong>English</strong> · <a href="README.md">中文</a>
+</p>
+
+<p align="center">
+  <a href="https://github.com/naplesblue/sideroll/actions/workflows/ci.yml"><img src="https://github.com/naplesblue/sideroll/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="MIT License" /></a>
+  <img src="https://img.shields.io/badge/macOS-15.4%2B-lightgrey" alt="macOS 15.4+" />
+</p>
+
+**Auto-archive iPhone photos from your trip into the camera folder, matched by capture time.**
+
+SideRoll is a macOS tool for photographers who shoot with both a camera and an iPhone. After a trip, it finds the iPhone photos taken in the same time window as your camera shots and copies them into the camera folder — no more hunting through Photos.app to manually select and export.
+
+## Demo
+
+![SideRoll demo](assets/demo.gif)
+
+---
 
 **把旅行期间用 iPhone 拍的照片，自动归档到相机文件夹 —— 按拍摄时间智能匹配。**
 

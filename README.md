@@ -1,10 +1,26 @@
-# SideRoll
+<p align="center">
+  <img src="assets/icon.png" width="128" alt="SideRoll" />
+</p>
 
-**中文** | [English](README_en.md)
+<h1 align="center">SideRoll</h1>
+
+<p align="center">
+  <strong>中文</strong> · <a href="README_en.md">English</a>
+</p>
+
+<p align="center">
+  <a href="https://github.com/naplesblue/sideroll/actions/workflows/ci.yml"><img src="https://github.com/naplesblue/sideroll/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="MIT License" /></a>
+  <img src="https://img.shields.io/badge/macOS-15.4%2B-lightgrey" alt="macOS 15.4+" />
+</p>
 
 **把旅行期间用 iPhone 拍的照片，自动归档到相机文件夹 —— 按拍摄时间智能匹配。**
 
 SideRoll 是一个 macOS 工具，面向同时使用相机和 iPhone 拍摄的摄影爱好者。旅行结束后，它会自动找出 iPhone 上与相机照片同一时间段内拍摄的照片，复制到相机文件夹中，省去在 Photos.app 里手动翻找、选片、导出的麻烦。
+
+## 演示
+
+![SideRoll 演示](assets/demo.gif)
 
 ## 工作流程
 

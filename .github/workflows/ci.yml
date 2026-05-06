@@ -1,0 +1,40 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Cancel in-progress runs for the same ref when a new commit is pushed.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Show toolchain
+        run: |
+          xcodebuild -version
+          swift --version
+
+      - name: Build (Debug)
+        run: |
+          xcodebuild build \
+            -project SideRoll.xcodeproj \
+            -scheme SideRoll \
+            -configuration Debug \
+            -destination 'platform=macOS'
+
+      - name: Test
+        run: |
+          xcodebuild test \
+            -project SideRoll.xcodeproj \
+            -scheme SideRoll \
+            -configuration Debug \
+            -destination 'platform=macOS' \
+            -only-testing:SideRollTests/TimeWindowResolverTests

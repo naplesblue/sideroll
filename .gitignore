@@ -29,6 +29,11 @@ Package.pins
 Package.resolved
 .swiftpm/
 
+# Release build artifacts (produced by scripts/build-dmg.sh)
+.build-release/
+.build-release.log
+dist/
+
 # CocoaPods
 Pods/
 
