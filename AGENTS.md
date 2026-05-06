@@ -77,7 +77,7 @@ SideRoll/
 ├── SideRoll.xcodeproj/
 ├── SideRoll/                    ← 主 target 源代码（Xcode 自动同步）
 │   ├── SideRollApp.swift
-│   ├── ContentView.swift        ← 主布局：HSplitView(sidebar + grid) + BottomBar
+│   ├── ContentView.swift        ← 主布局：HSplitView(sidebar + grid) + BottomBar + 预览 lightbox
 │   ├── Models/
 │   │   └── CameraPhoto.swift
 │   ├── Services/
@@ -91,8 +91,8 @@ SideRoll/
 │   ├── Views/
 │   │   ├── SidebarView.swift      ← 文件夹卡片 + 缓冲滑块 + 目标路径 + 选项
 │   │   ├── DeviceBar.swift         ← 顶部设备状态栏（电量 + 锁屏检测）
-│   │   ├── GridHeaderView.swift    ← 候选照片标题 + 全选/反选
-│   │   ├── CandidateGridView.swift ← LazyVGrid 缩略图网格
+│   │   ├── GridHeaderView.swift    ← 候选照片标题 + 全选/反选 + 缩略图大小滑块
+│   │   ├── CandidateGridView.swift ← LazyVGrid 缩略图网格 + DNG thumbnail fallback
 │   │   ├── BottomBar.swift         ← 底部状态栏 + 开始传送按钮
 │   │   └── Theme.swift             ← 主题色定义（amber）
 │   ├── Assets.xcassets/
@@ -128,13 +128,20 @@ fetchEXIFDates（粗筛 ±24h → requestMetadata → {Exif}.DateTimeOriginal / 
         ↓
 candidates 过滤（exifDates + exifFetched 双数据结构，避免 Date? 字典陷阱）
         ↓
-ThumbnailLoader（懒加载 + 5s 超时 + 3 次重试）
+ProRAW 去重（DNG 优先，隐藏配对 JPG/HEIC，含 E-prefix 匹配：IMG_E1908→IMG_1908）
+        ↓
+已导入检测（scanExistingFiles → existingFiles Set，控制 dimming + auto-deselect）
+        ↓
+ThumbnailLoader（懒加载 + 5s 超时 + 3 次重试 + DNG→JPG/HEIC fallback）
         ↓
 用户在 CandidateGridView 勾选/取消（ForEach 按 name 去重）
+  ├─ 单击：切换选中
+  └─ 双击：下载原图到临时目录，lightbox 预览（ESC/点击关闭）
         ↓
 ImportEngine（requestDownloadFile → 用户可编辑的目标子文件夹）
   ├─ skipExisting：只传送新文件 / 覆盖
-  └─ setFileDate：保留原 EXIF 时间到文件系统
+  ├─ setFileDate：保留原 EXIF 时间到文件系统
+  └─ 导入后自动刷新 existingFiles 状态
 ```
 
 ### 关键 API 速记
@@ -167,13 +174,16 @@ ImportEngine（requestDownloadFile → 用户可编辑的目标子文件夹）
 | 相机文件夹扫描 | **仅扫描相机 RAW 格式**（`cameraRAWExtensions`），排除 DNG/JPG/HEIC 后期导出文件（日期可能被修改），排除导入目标子文件夹 |
 | 时区 | `Date` 是绝对时刻，相机/iPhone 时区不同也不影响。但用户的相机时区设错时窗口会偏（v2 再做平移 UI） |
 | 大量照片性能 | `mediaFiles` 在 iPhone 上可能上万。先用 `creationDate` 粗筛（±24h），对粗筛结果拉 EXIF 精确过滤，再按需拉缩略图（懒加载 + 5s 超时 + 3 次重试） |
-| 重复导入 | `onlyNewFiles` 开：跳过已存在同名文件。关：覆盖 |
+| 重复导入 | `onlyNewFiles` 开：跳过已存在同名文件，候选照片 dimmed + 默认不选中。关：全部正常显示并选中 |
 | 单张下载失败 | 不中断批量，最后聚合 |
 | Live Photo .MOV 配对 | 通过 `ICCameraFile.sidecarFiles` 取得（不在 `mediaFiles` 顶层）。`LivePhotoPairing.filesToImport(for:)` 自动展开 [HEIC] → [HEIC, MOV]。`.AAE` sidecar 跳过（Photos.app 编辑元数据，对 LR/C1 无用）|
 | 中途拔 iPhone | 剩余文件标记 failed，不 crash |
-| 导入完成 | 弹出 alert 对话框，显示结果摘要。若"完成后退出"开启，按钮变为"完成并退出" |
+| 导入完成 | 弹出 alert 对话框，显示结果摘要。若"完成后退出"开启，按钮变为"完成并退出"。导入后自动刷新 existingFiles 更新 dimming 状态 |
 | DCIM 重名文件 | iPhone 不同 DCIM 子文件夹可能有同名文件，`CandidateGridView` 按 name 去重避免 ForEach ID 冲突 |
 | PTP metadata 格式 | sub-dict 是 `[AnyHashable: Any]`，cast 成 `[String: Any]` 会**静默失败** |
+| iPhone ProRAW 配对 | DNG + JPG/HEIC 同 basename（或 E-prefix：`IMG_E1908.JPG` ↔ `IMG_1908.DNG`）。候选列表只显示 DNG，隐藏配对文件。DNG 缩略图失败时用配对文件的缩略图 fallback |
+| DNG 缩略图 | PTP 对 DNG 缩略图支持不稳定，部分返回空。fallback map 从 `enumerator.availableFiles` 全量构建（不是已过滤的 candidates），确保被 ProRAW 去重隐藏的 JPG 仍可作为缩略图源 |
+| 窗口关闭重开 | `DeviceBrowser.start()` 幂等（`isStarted` 防重入），`onReceive` 判断 `device ===` 防止重复创建 PhotoEnumerator 导致 PTP session 冲突 |
 
 ---
 
@@ -640,6 +650,7 @@ enum TimeWindowResolver {
 - 漏选数（应该被选中但没出现在候选里的）
 - 多选数（不该选中但出现的）
 - HEIC EXIF 拍摄时间一致性
+- ProRAW 去重正确性（DNG 是否正确显示、配对 JPG/HEIC 是否隐藏）
 - 总耗时（vs 手工流程）
 
 注：原计划的"Live Photo 配对正确率"指标已移除——iOS PTP 不暴露 Live Photo 配对视频（详见 §2 / T3.2）
@@ -731,7 +742,7 @@ enum TimeWindowResolver {
 | 1 · iPhone USB | ✅ 3/3 完成 |
 | 2 · 相机解析 | ✅ 4/4 完成 |
 | 3 · 导入引擎 | ✅ 4/4 完成 |
-| 4 · SwiftUI | ✅ 5/5 完成（含选项接入 + bug 修复） |
+| 4 · SwiftUI | ✅ 5/5 完成（含选项接入 + bug 修复 + UX 强化） |
 | 5 · 验收 | 0/3 |
 
 ### 下一步
@@ -749,6 +760,16 @@ App 核心功能已全部实现并真机验证通过。Sidebar 选项已接入�
 - ❌ **删除 iPhone 原文件**：iOS PTP 不支持（`requestDeleteFiles` 返回 "Delete files failed"），功能已移除
 - ❌ **自动断开设备**：`requestEjectOrDisconnect` 无效果，改为"完成后退出"
 
+### UX 强化（2026-05-05 下午）
+
+- ✅ **已导入文件检测**：选定文件夹后扫描目标子文件夹，已存在文件 35% opacity dimmed + 默认不选中（`onlyNewFiles` 开启时）
+- ✅ **导入后状态刷新**：每次导入完成后自动 `scanExistingFiles`，立即更新 dimming 状态
+- ✅ **缩略图大小滑块**：Finder 风格，70px–220px，GridHeaderView 内
+- ✅ **缩略图显示模式**：从裁切改为 fit + letterbox（黑色背景），不丢失内容
+- ✅ **双击预览**：下载原图到临时目录，lightbox 叠加层显示（点击/ESC 关闭，右上角 ⊗ 按钮）
+- ✅ **ProRAW 去重**：DNG 存在时隐藏配对 JPG/HEIC（含 `IMG_E` 前缀匹配），只导入 DNG
+- ✅ **DNG 缩略图 fallback**：DNG 缩略图加载失败时，用配对 JPG/HEIC 的缩略图替代（从全量 availableFiles 构建 fallback map）
+
 ### 已修复的重要 bug（2026-05-05）
 
 - ✅ PTP metadata sub-dict cast：`[AnyHashable: Any]` 不是 `[String: Any]`，导致所有 HEIC 的 EXIF 解析静默失败
@@ -757,6 +778,10 @@ App 核心功能已全部实现并真机验证通过。Sidebar 选项已接入�
 - ✅ 视频文件跳过 EXIF 检查（PTP 不返回视频 EXIF），用 `creationDate`
 - ✅ 缩略图加载超时 + 重试（5s timeout + 3 retries）
 - ✅ DCIM 子文件夹重名文件去重
+- ✅ `NSApp` 为 nil 时 `init()` 崩溃：Dark Mode 设置移到 `.onAppear`
+- ✅ 窗口关闭重开导致设备断连：`DeviceBrowser.start()` 幂等 + `onReceive` 判断 `device ===` 防重复 session
+- ✅ 预览 `ImportEngine` 局部变量被 ARC 提前释放：改为 `@State` 持有引用
+- ✅ `No color named 'Accent'` 警告：替换为 `Color.amber`
 
 ### 待还的技术债
 
@@ -768,6 +793,7 @@ App 核心功能已全部实现并真机验证通过。Sidebar 选项已接入�
 - PTP metadata 格式依赖 macOS 26 行为，未来版本可能变化
 - 首次运行时系统可能弹出"图像捕捉"权限弹窗
 - 视频日期用 `creationDate`（文件系统日期），可能不如 EXIF 精确，但视频文件通常不被编辑器修改日期
+- iPhone ProRAW 的 DNG 缩略图 PTP 支持不稳定（部分返回空），已用 fallback 缓解
 
 ### 接手 checklist
 
@@ -790,4 +816,4 @@ App 核心功能已全部实现并真机验证通过。Sidebar 选项已接入�
 
 ---
 
-**最后更新**：2026-05-05 by Antigravity (Live Photo sidecar + 强制 Dark Mode + EXIF/日期 bug 修复)
+**最后更新**：2026-05-06 by Antigravity (ProRAW 去重 + 预览 lightbox + 已导入检测 + 窗口断连修复 + DNG thumbnail fallback)
