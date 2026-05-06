@@ -1,6 +1,6 @@
 //
 //  DeviceBar.swift
-//  SideRoll — Top bar: device name + status + file count + battery
+//  SideRoll — Top bar: device name + status + file count + battery + language toggle
 //
 
 import SwiftUI
@@ -11,6 +11,8 @@ struct DeviceBar: View {
     var enumerator: PhotoEnumerator?
     var deviceFileCount: Int
     @State private var isLocked: Bool = true
+    @AppStorage("appLanguage") private var languageRaw = AppLanguage.en.rawValue
+    private var lang: AppLanguage { AppLanguage(rawValue: languageRaw) ?? .en }
 
     private var lockPublisher: AnyPublisher<Bool, Never> {
         if let enumerator {
@@ -37,11 +39,11 @@ struct DeviceBar: View {
                 }
 
                 if deviceFileCount > 0 {
-                    Text("· \(deviceFileCount) photos")
+                    Text(L.photoCount(lang, deviceFileCount))
                         .foregroundStyle(.secondary)
                 }
             } else {
-                Text("No iPhone connected")
+                Text(L.noDevice(lang))
                     .foregroundStyle(.secondary)
             }
 
@@ -59,6 +61,15 @@ struct DeviceBar: View {
                     }
                 }
             }
+
+            // Language toggle
+            Picker("", selection: $languageRaw) {
+                ForEach(AppLanguage.allCases, id: \.rawValue) { lang in
+                    Text(lang.displayName).tag(lang.rawValue)
+                }
+            }
+            .pickerStyle(.segmented)
+            .frame(width: 64)
         }
         .font(.callout)
         .padding(.horizontal, 16)
@@ -75,9 +86,9 @@ struct DeviceBar: View {
     }
 
     private var statusText: String {
-        if deviceFileCount > 0 { return "Ready" }
-        if isLocked { return "Please unlock your iPhone" }
-        return "Connecting…"
+        if deviceFileCount > 0 { return L.ready(lang) }
+        if isLocked { return L.unlockiPhone(lang) }
+        return L.connecting(lang)
     }
 
     private func batteryIcon(level: Int) -> String {

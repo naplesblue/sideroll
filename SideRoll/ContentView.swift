@@ -34,6 +34,8 @@ struct ContentView: View {
     @AppStorage("onlyNewFiles") private var onlyNewFiles = true
     @AppStorage("keepOriginalEXIF") private var keepOriginalEXIF = true
     @AppStorage("autoQuit") private var autoQuit = false
+    @AppStorage("appLanguage") private var languageRaw = AppLanguage.en.rawValue
+    private var lang: AppLanguage { AppLanguage(rawValue: languageRaw) ?? .en }
 
     // Device observation
     @State private var deviceFileCount: Int = 0
@@ -176,8 +178,8 @@ struct ContentView: View {
         .onChange(of: buffer) { _, _ in autoSelectAll() }
         .onChange(of: onlyNewFiles) { _, _ in autoSelectAll() }
         .onChange(of: subfolderName) { _, _ in scanExistingFiles() }
-        .alert("Import Complete", isPresented: $showImportResult) {
-            Button(autoQuit ? "Done & Quit" : "Done") {
+        .alert(L.importComplete(lang), isPresented: $showImportResult) {
+            Button(autoQuit ? L.doneQuit(lang) : L.done(lang)) {
                 if autoQuit {
                     NSApplication.shared.terminate(nil)
                 }
@@ -308,7 +310,7 @@ struct ContentView: View {
         isImporting = true
         importCancelled = false
         importProgress = 0
-        importProgressText = "Starting…"
+        importProgressText = L.starting(lang)
 
         Task {
             var downloaded = 0, skipped = 0, failed = 0
@@ -317,7 +319,7 @@ struct ContentView: View {
             for (i, item) in pending.enumerated() {
                 if importCancelled {
                     let remaining = total - i
-                    importProgressText = "Cancelled · \(downloaded) imported · \(remaining) remaining"
+                    importProgressText = L.cancelled(lang, downloaded, remaining)
                     break
                 }
 
@@ -342,10 +344,10 @@ struct ContentView: View {
             }
 
             if !importCancelled {
-                importResultMessage = "\(downloaded) imported\(skipped > 0 ? "\n\(skipped) skipped (duplicate)" : "")\(failed > 0 ? "\n\(failed) failed" : "")"
-                importProgressText = "Done · \(downloaded) imported · \(skipped) skipped · \(failed) failed"
+                importResultMessage = L.importResult(lang, downloaded, skipped, failed)
+                importProgressText = L.importSummary(lang, downloaded, skipped, failed)
             } else {
-                importResultMessage = "Cancelled\n\(downloaded) imported, \(total - downloaded - skipped - failed) remaining"
+                importResultMessage = L.cancelledResult(lang, downloaded, total - downloaded - skipped - failed)
             }
             isImporting = false
             scanExistingFiles()

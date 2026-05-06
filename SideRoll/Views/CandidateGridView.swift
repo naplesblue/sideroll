@@ -15,6 +15,8 @@ struct CandidateGridView: View {
     var onlyNewFiles: Bool
     var thumbnailSize: CGFloat
     var onPreview: ((ICCameraFile) -> Void)?
+    @AppStorage("appLanguage") private var languageRaw = AppLanguage.en.rawValue
+    private var lang: AppLanguage { AppLanguage(rawValue: languageRaw) ?? .en }
 
     private var columns: [GridItem] {
         [GridItem(.adaptive(minimum: thumbnailSize, maximum: thumbnailSize + 40))]
@@ -27,10 +29,10 @@ struct CandidateGridView: View {
                     Image(systemName: "photo.on.rectangle.angled")
                         .font(.system(size: 40))
                         .foregroundStyle(.tertiary)
-                    Text("No candidates")
+                    Text(L.noCandidates(lang))
                         .font(.system(size: 13))
                         .foregroundStyle(.secondary)
-                    Text("Select a camera folder and connect your iPhone")
+                    Text(L.selectFolderHint(lang))
                         .font(.system(size: 13))
                         .foregroundStyle(.tertiary)
                 }

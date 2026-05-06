@@ -13,6 +13,8 @@ struct BottomBar: View {
     var progressText: String
     var onImport: () -> Void
     var onCancel: () -> Void
+    @AppStorage("appLanguage") private var languageRaw = AppLanguage.en.rawValue
+    private var lang: AppLanguage { AppLanguage(rawValue: languageRaw) ?? .en }
 
     var body: some View {
         HStack(spacing: 12) {
@@ -23,17 +25,17 @@ struct BottomBar: View {
                 Text(progressText)
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                Button("Cancel") { onCancel() }
+                Button(L.cancel(lang)) { onCancel() }
                     .controlSize(.small)
             } else {
-                Text("\(selectedCount) ready · ~\(String(format: "%.1f", totalSizeMB)) MB")
+                Text(L.readyCount(lang, selectedCount, String(format: "%.1f", totalSizeMB)))
                     .font(.callout)
                     .foregroundStyle(.secondary)
 
                 Spacer()
 
                 Button(action: onImport) {
-                    Text("Import")
+                    Text(L.importButton(lang))
                         .fontWeight(.medium)
                         .padding(.horizontal, 20)
                         .padding(.vertical, 6)

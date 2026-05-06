@@ -18,24 +18,26 @@ struct SidebarView: View {
     @Binding var keepOriginalEXIF: Bool
 
     @State private var isScanning = false
+    @AppStorage("appLanguage") private var languageRaw = AppLanguage.en.rawValue
+    private var lang: AppLanguage { AppLanguage(rawValue: languageRaw) ?? .en }
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
                 // — Camera folder
-                sectionHeader("Camera Folder")
+                sectionHeader(L.cameraFolder(lang))
                 folderCard
 
                 // — Time window buffer
-                sectionHeader("Time Buffer")
+                sectionHeader(L.timeBuffer(lang))
                 bufferSection
 
                 // — Target
-                sectionHeader("Destination")
+                sectionHeader(L.destination(lang))
                 targetSection
 
                 // — Options
-                sectionHeader("Options")
+                sectionHeader(L.options(lang))
                 preferencesSection
             }
             .padding(16)
@@ -59,7 +61,7 @@ struct SidebarView: View {
                             .lineLimit(1)
                             .truncationMode(.middle)
                         if !cameraPhotos.isEmpty {
-                            Text("\(cameraPhotos.count) photos")
+                            Text(L.photosCount(lang, cameraPhotos.count))
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                             if let w = timeWindow {
@@ -74,7 +76,7 @@ struct SidebarView: View {
                         }
                     }
                 } else {
-                    Text("Choose Folder…")
+                    Text(L.chooseFolder(lang))
                         .font(.callout)
                         .foregroundStyle(.secondary)
                 }
@@ -109,7 +111,7 @@ struct SidebarView: View {
 
     private var bufferSection: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("±\(String(format: "%.1f", buffer / 3600)) hours")
+            Text(L.hours(lang, String(format: "%.1f", buffer / 3600)))
                 .font(.system(size: 22, weight: .bold, design: .rounded))
                 .foregroundStyle(Color.amber)
 
@@ -135,7 +137,7 @@ struct SidebarView: View {
                         .font(.system(size: 12))
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
-                    TextField("Subfolder", text: $subfolderName)
+                    TextField(L.subfolder(lang), text: $subfolderName)
                         .font(.system(size: 12))
                         .textFieldStyle(.plain)
                         .frame(maxWidth: 80)
@@ -151,7 +153,7 @@ struct SidebarView: View {
                         .stroke(Color.white.opacity(0.1), lineWidth: 1)
                 )
             } else {
-                Text("Not selected")
+                Text(L.notSelected(lang))
                     .font(.system(size: 12))
                     .foregroundStyle(.secondary)
             }
@@ -162,9 +164,9 @@ struct SidebarView: View {
 
     private var preferencesSection: some View {
         VStack(alignment: .leading, spacing: 12) {
-            prefToggle("New files only", isOn: $onlyNewFiles)
-            prefToggle("Preserve EXIF dates", isOn: $keepOriginalEXIF)
-            prefToggle("Quit after import", isOn: $autoQuit)
+            prefToggle(L.newFilesOnly(lang), isOn: $onlyNewFiles)
+            prefToggle(L.preserveEXIF(lang), isOn: $keepOriginalEXIF)
+            prefToggle(L.quitAfterImport(lang), isOn: $autoQuit)
         }
     }
 
@@ -190,7 +192,7 @@ struct SidebarView: View {
         panel.canChooseFiles = false
         panel.canChooseDirectories = true
         panel.allowsMultipleSelection = false
-        panel.prompt = "Choose"
+        panel.prompt = L.choose(lang)
         guard panel.runModal() == .OK, let url = panel.url else { return }
         scanFolder(url)
     }

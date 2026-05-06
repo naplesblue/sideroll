@@ -10,6 +10,8 @@ struct PreviewOverlay: View {
     let image: NSImage?
     let isLoading: Bool
     let onDismiss: () -> Void
+    @AppStorage("appLanguage") private var languageRaw = AppLanguage.en.rawValue
+    private var lang: AppLanguage { AppLanguage(rawValue: languageRaw) ?? .en }
 
     var body: some View {
         ZStack {
@@ -21,7 +23,7 @@ struct PreviewOverlay: View {
                     .aspectRatio(contentMode: .fit)
                     .padding(40)
             } else {
-                ProgressView("Loading full resolution…")
+                ProgressView(L.loadingPreview(lang))
                     .foregroundStyle(.white)
             }
 
@@ -45,7 +47,7 @@ struct PreviewOverlay: View {
             // Hint text at bottom
             VStack {
                 Spacer()
-                Text("Click anywhere or press ESC to close")
+                Text(L.closeHint(lang))
                     .font(.system(size: 12))
                     .foregroundStyle(.white.opacity(0.4))
                     .padding(.bottom, 16)
