@@ -13,18 +13,18 @@ struct GridHeaderView: View {
 
     var body: some View {
         HStack {
-            Text("候选照片")
+            Text("Candidates")
                 .font(.system(size: 15, weight: .semibold))
 
-            Text("窗口内 \(totalCount) 张 · 已选 \(selectedCount)")
+            Text("\(totalCount) found · \(selectedCount) selected")
                 .font(.system(size: 13))
                 .foregroundStyle(.secondary)
 
             Spacer()
 
-            Button("全选", action: onSelectAll)
+            Button("Select All", action: onSelectAll)
                 .font(.system(size: 13))
-            Button("反选", action: onInvertSelection)
+            Button("Invert", action: onInvertSelection)
                 .font(.system(size: 13))
         }
         .padding(.horizontal, 16)

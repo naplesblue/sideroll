@@ -18,9 +18,9 @@ struct ContentView: View {
 
     // Candidates & selection
     @State private var selectedNames: Set<String> = []
-    @State private var exifDates: [String: Date] = [:]   // fileName → EXIF DateTimeOriginal
-    @State private var exifFetched: Set<String> = []     // files where EXIF was attempted
-    @State private var existingFiles: Set<String> = []   // files already in target subfolder
+    @State private var exifDates: [String: Date] = [:]
+    @State private var exifFetched: Set<String> = []
+    @State private var existingFiles: Set<String> = []
 
     // Import state
     @State private var isImporting = false
@@ -44,6 +44,8 @@ struct ContentView: View {
     @State private var previewLoading = false
     @State private var previewEngine: ImportEngine?
 
+    // MARK: - Computed properties
+
     private var fileCountPublisher: AnyPublisher<Int, Never> {
         if let enumerator {
             return enumerator.$totalCount.eraseToAnyPublisher()
@@ -55,53 +57,14 @@ struct ContentView: View {
         TimeWindowResolver.resolve(photos: cameraPhotos, buffer: buffer)
     }
 
-    /// Resolve the best date for an iPhone photo.
-    /// - EXIF fetched + date found → use EXIF date
-    /// - EXIF fetched + date NOT found → nil (exclude from candidates)
-    /// - EXIF not yet fetched → use creationDate (pre-EXIF rough display)
-    private func resolvedDate(for file: ICCameraFile) -> Date? {
-        guard let name = file.name else { return file.creationDate }
-        if let exifDate = exifDates[name] {
-            return exifDate
-        }
-        if exifFetched.contains(name) {
-            // EXIF was fetched but DateTimeOriginal not found — exclude
-            return nil
-        }
-        // Not yet fetched — fall back to creationDate
-        return file.creationDate
-    }
-
-    private static let dngPairedExts: Set<String> = ["jpg", "jpeg", "heic", "heif"]
-
     private var candidates: [ICCameraFile] {
         guard let window = timeWindow, let enumerator else { return [] }
-        let inWindow = enumerator.availableFiles.filter { file in
-            guard let date = resolvedDate(for: file) else { return false }
-            return date >= window.start && date <= window.end
-        }
-        // Hide JPG/HEIC when a DNG with same basename exists (iPhone ProRAW pairs)
-        let dngBasenames = Set(inWindow.compactMap { file -> String? in
-            guard let name = file.name,
-                  (name as NSString).pathExtension.lowercased() == "dng" else { return nil }
-            return (name as NSString).deletingPathExtension
-        })
-        guard !dngBasenames.isEmpty else { return inWindow }
-        return inWindow.filter { file in
-            guard let name = file.name else { return true }
-            let ext = (name as NSString).pathExtension.lowercased()
-            if Self.dngPairedExts.contains(ext) {
-                let base = (name as NSString).deletingPathExtension
-                if dngBasenames.contains(base) { return false }
-                // E-prefix match: IMG_E1908.JPG → IMG_1908
-                if base.contains("_E"),
-                   let range = base.range(of: "_E", options: .backwards) {
-                    let stripped = base.replacingCharacters(in: range, with: "_")
-                    if dngBasenames.contains(stripped) { return false }
-                }
-            }
-            return true
-        }
+        return CandidateFilter.filter(
+            files: enumerator.availableFiles,
+            window: window,
+            exifDates: exifDates,
+            exifFetched: exifFetched
+        )
     }
 
     private var selectedFiles: [ICCameraFile] {
@@ -113,14 +76,14 @@ struct ContentView: View {
         return Double(bytes) / 1_048_576
     }
 
+    // MARK: - Body
+
     var body: some View {
         VStack(spacing: 0) {
-            // Top device bar
             DeviceBar(enumerator: enumerator, deviceFileCount: deviceFileCount)
 
             Divider().overlay(Color.amber.opacity(0.3))
 
-            // Main content: sidebar + grid
             HSplitView {
                 SidebarView(
                     targetFolder: $targetFolder,
@@ -134,7 +97,6 @@ struct ContentView: View {
                 )
                 .frame(minWidth: 200, idealWidth: 220, maxWidth: 260)
 
-                // Right: grid
                 VStack(spacing: 0) {
                     GridHeaderView(
                         totalCount: candidates.count,
@@ -177,7 +139,6 @@ struct ContentView: View {
 
             Divider().overlay(Color.amber.opacity(0.3))
 
-            // Bottom bar
             BottomBar(
                 selectedCount: selectedNames.count,
                 totalSizeMB: totalSizeMB,
@@ -190,50 +151,12 @@ struct ContentView: View {
         }
         .background(Color(nsColor: .windowBackgroundColor))
         .overlay {
-            // Full-resolution preview overlay (lightbox style)
             if previewImage != nil || previewLoading {
-                ZStack {
-                    Color.black.opacity(0.85)
-
-                    if let previewImage {
-                        Image(nsImage: previewImage)
-                            .resizable()
-                            .aspectRatio(contentMode: .fit)
-                            .padding(40)
-                    } else {
-                        ProgressView("正在加载原图…")
-                            .foregroundStyle(.white)
-                    }
-
-                    // Close button — top right
-                    VStack {
-                        HStack {
-                            Spacer()
-                            Button {
-                                dismissPreview()
-                            } label: {
-                                Image(systemName: "xmark.circle.fill")
-                                    .font(.system(size: 24))
-                                    .foregroundStyle(.white.opacity(0.7))
-                            }
-                            .buttonStyle(.plain)
-                            .padding(12)
-                        }
-                        Spacer()
-                    }
-
-                    // Hint text at bottom
-                    VStack {
-                        Spacer()
-                        Text("点击任意位置或按 ESC 关闭")
-                            .font(.system(size: 12))
-                            .foregroundStyle(.white.opacity(0.4))
-                            .padding(.bottom, 16)
-                    }
-                }
-                .contentShape(Rectangle())
-                .onTapGesture { dismissPreview() }
-                .onKeyPress(.escape) { dismissPreview(); return .handled }
+                PreviewOverlay(
+                    image: previewImage,
+                    isLoading: previewLoading,
+                    onDismiss: { dismissPreview() }
+                )
             }
         }
         .frame(minWidth: 900, minHeight: 640)
@@ -253,8 +176,8 @@ struct ContentView: View {
         .onChange(of: buffer) { _, _ in autoSelectAll() }
         .onChange(of: onlyNewFiles) { _, _ in autoSelectAll() }
         .onChange(of: subfolderName) { _, _ in scanExistingFiles() }
-        .alert("传送完成", isPresented: $showImportResult) {
-            Button(autoQuit ? "完成并退出" : "完成") {
+        .alert("Import Complete", isPresented: $showImportResult) {
+            Button(autoQuit ? "Done & Quit" : "Done") {
                 if autoQuit {
                     NSApplication.shared.terminate(nil)
                 }
@@ -264,6 +187,8 @@ struct ContentView: View {
         }
     }
 
+    // MARK: - Actions
+
     private func dismissPreview() {
         previewImage = nil
         previewLoading = false
@@ -271,14 +196,12 @@ struct ContentView: View {
 
     private func autoSelectAll() {
         if onlyNewFiles {
-            // Only select candidates not already in target folder
             selectedNames = Set(candidates.compactMap(\.name).filter { !existingFiles.contains($0) })
         } else {
             selectedNames = Set(candidates.compactMap(\.name))
         }
     }
 
-    /// Scan the target subfolder for already-imported filenames.
     private func scanExistingFiles() {
         guard let folder = targetFolder else {
             existingFiles = []
@@ -294,13 +217,11 @@ struct ContentView: View {
         existingFiles = Set(contents.map { $0.lastPathComponent })
     }
 
-    /// Download the full-resolution image to a temp directory and show in preview overlay.
     private func previewFile(_ file: ICCameraFile) {
         guard let enumerator, !previewLoading else { return }
         previewLoading = true
         previewImage = nil
 
-        // Hold engine reference in @State so it survives the PTP download callback
         let engine = ImportEngine(device: enumerator.device)
         previewEngine = engine
         let tempDir = FileManager.default.temporaryDirectory
@@ -325,12 +246,8 @@ struct ContentView: View {
         }
     }
 
-    /// Fetch EXIF DateTimeOriginal for iPhone photos whose creationDate falls
-    /// near the camera time window. Uses a generous ±24h margin for the rough
-    /// filter to catch photos with drifted file-system dates.
     private func fetchEXIFDates() {
         guard let enumerator, let window = timeWindow else { return }
-        // Generous rough filter: ±24 hours beyond the buffered window
         let roughStart = window.start.addingTimeInterval(-86400)
         let roughEnd = window.end.addingTimeInterval(86400)
         let roughCandidates = enumerator.availableFiles.filter { file in
@@ -346,9 +263,7 @@ struct ContentView: View {
             var fetched = exifFetched
             for file in roughCandidates {
                 guard let name = file.name else { continue }
-                // Skip if already attempted
                 guard !fetched.contains(name) else { continue }
-                // Videos: skip EXIF fetch, use creationDate (reliable for unedited videos)
                 let ext = (name as NSString).pathExtension.lowercased()
                 if videoExts.contains(ext) { continue }
                 fetched.insert(name)
@@ -365,7 +280,6 @@ struct ContentView: View {
             }
             exifDates = dates
             exifFetched = fetched
-            // Re-select after EXIF dates refine the candidate list
             autoSelectAll()
             print("[EXIF] Resolved \(dates.count) dates, \(fetched.count) fetched")
         }
@@ -377,10 +291,6 @@ struct ContentView: View {
         let destFolder = folder.appendingPathComponent(destName, isDirectory: true)
         guard !selectedFiles.isEmpty else { return }
 
-        // Expand each selected file to include its Live Photo .MOV sidecar
-        // (when present). Each row carries the parent's EXIF date so the
-        // .MOV gets the same file-system timestamp, keeping pairs together
-        // in chronological views.
         let resolvedDates = exifDates
         struct Pending { let file: ICCameraFile; let preferredDate: Date? }
         let pending: [Pending] = selectedFiles.flatMap { parent -> [Pending] in
@@ -391,7 +301,6 @@ struct ContentView: View {
         }
         guard !pending.isEmpty else { return }
 
-        // Capture option values before entering async context
         let skipExisting = onlyNewFiles
         let preserveEXIF = keepOriginalEXIF
 
@@ -399,7 +308,7 @@ struct ContentView: View {
         isImporting = true
         importCancelled = false
         importProgress = 0
-        importProgressText = "开始传送…"
+        importProgressText = "Starting…"
 
         Task {
             var downloaded = 0, skipped = 0, failed = 0
@@ -408,7 +317,7 @@ struct ContentView: View {
             for (i, item) in pending.enumerated() {
                 if importCancelled {
                     let remaining = total - i
-                    importProgressText = "已取消 · \(downloaded) 已传送 · \(remaining) 剩余"
+                    importProgressText = "Cancelled · \(downloaded) imported · \(remaining) remaining"
                     break
                 }
 
@@ -433,10 +342,10 @@ struct ContentView: View {
             }
 
             if !importCancelled {
-                importResultMessage = "\(downloaded) 张已传送\(skipped > 0 ? "\n\(skipped) 张已跳过（重复）" : "")\(failed > 0 ? "\n\(failed) 张失败" : "")"
-                importProgressText = "完成 · \(downloaded) 已传送 · \(skipped) 已跳过 · \(failed) 失败"
+                importResultMessage = "\(downloaded) imported\(skipped > 0 ? "\n\(skipped) skipped (duplicate)" : "")\(failed > 0 ? "\n\(failed) failed" : "")"
+                importProgressText = "Done · \(downloaded) imported · \(skipped) skipped · \(failed) failed"
             } else {
-                importResultMessage = "已取消\n\(downloaded) 张已传送，\(total - downloaded - skipped - failed) 张未处理"
+                importResultMessage = "Cancelled\n\(downloaded) imported, \(total - downloaded - skipped - failed) remaining"
             }
             isImporting = false
             scanExistingFiles()

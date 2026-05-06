@@ -4,6 +4,7 @@
 //
 
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct SidebarView: View {
     @Binding var targetFolder: URL?
@@ -21,20 +22,20 @@ struct SidebarView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
-                // — 相机文件夹
-                sectionHeader("相机文件夹")
+                // — Camera folder
+                sectionHeader("Camera Folder")
                 folderCard
 
-                // — 时间窗口缓冲
-                sectionHeader("时间窗口缓冲")
+                // — Time window buffer
+                sectionHeader("Time Buffer")
                 bufferSection
 
-                // — 目标
-                sectionHeader("目标")
+                // — Target
+                sectionHeader("Destination")
                 targetSection
 
-                // — 选项
-                sectionHeader("选项")
+                // — Options
+                sectionHeader("Options")
                 preferencesSection
             }
             .padding(16)
@@ -58,7 +59,7 @@ struct SidebarView: View {
                             .lineLimit(1)
                             .truncationMode(.middle)
                         if !cameraPhotos.isEmpty {
-                            Text("\(cameraPhotos.count) NEF")
+                            Text("\(cameraPhotos.count) photos")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                             if let w = timeWindow {
@@ -73,7 +74,7 @@ struct SidebarView: View {
                         }
                     }
                 } else {
-                    Text("选择文件夹…")
+                    Text("Choose Folder…")
                         .font(.callout)
                         .foregroundStyle(.secondary)
                 }
@@ -89,13 +90,26 @@ struct SidebarView: View {
             )
         }
         .buttonStyle(.plain)
+        .onDrop(of: [.fileURL], isTargeted: nil) { providers in
+            guard let provider = providers.first else { return false }
+            _ = provider.loadObject(ofClass: URL.self) { url, _ in
+                guard let url else { return }
+                var isDir: ObjCBool = false
+                guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir),
+                      isDir.boolValue else { return }
+                DispatchQueue.main.async {
+                    handleFolderDrop(url)
+                }
+            }
+            return true
+        }
     }
 
     // MARK: - Buffer
 
     private var bufferSection: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("±\(String(format: "%.1f", buffer / 3600)) 小时")
+            Text("±\(String(format: "%.1f", buffer / 3600)) hours")
                 .font(.system(size: 22, weight: .bold, design: .rounded))
                 .foregroundStyle(Color.amber)
 
@@ -121,7 +135,7 @@ struct SidebarView: View {
                         .font(.system(size: 12))
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
-                    TextField("子文件夹", text: $subfolderName)
+                    TextField("Subfolder", text: $subfolderName)
                         .font(.system(size: 12))
                         .textFieldStyle(.plain)
                         .frame(maxWidth: 80)
@@ -137,7 +151,7 @@ struct SidebarView: View {
                         .stroke(Color.white.opacity(0.1), lineWidth: 1)
                 )
             } else {
-                Text("未选择")
+                Text("Not selected")
                     .font(.system(size: 12))
                     .foregroundStyle(.secondary)
             }
@@ -148,9 +162,9 @@ struct SidebarView: View {
 
     private var preferencesSection: some View {
         VStack(alignment: .leading, spacing: 12) {
-            prefToggle("只传送新文件", isOn: $onlyNewFiles)
-            prefToggle("保留原 EXIF 时间", isOn: $keepOriginalEXIF)
-            prefToggle("完成后退出", isOn: $autoQuit)
+            prefToggle("New files only", isOn: $onlyNewFiles)
+            prefToggle("Preserve EXIF dates", isOn: $keepOriginalEXIF)
+            prefToggle("Quit after import", isOn: $autoQuit)
         }
     }
 
@@ -176,8 +190,16 @@ struct SidebarView: View {
         panel.canChooseFiles = false
         panel.canChooseDirectories = true
         panel.allowsMultipleSelection = false
-        panel.prompt = "选择"
+        panel.prompt = "Choose"
         guard panel.runModal() == .OK, let url = panel.url else { return }
+        scanFolder(url)
+    }
+
+    private func handleFolderDrop(_ url: URL) {
+        scanFolder(url)
+    }
+
+    private func scanFolder(_ url: URL) {
         targetFolder = url
         isScanning = true
         Task {

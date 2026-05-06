@@ -23,17 +23,17 @@ struct BottomBar: View {
                 Text(progressText)
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                Button("取消") { onCancel() }
+                Button("Cancel") { onCancel() }
                     .controlSize(.small)
             } else {
-                Text("\(selectedCount) 张准备就绪 · 约 \(String(format: "%.1f", totalSizeMB)) MB")
+                Text("\(selectedCount) ready · ~\(String(format: "%.1f", totalSizeMB)) MB")
                     .font(.callout)
                     .foregroundStyle(.secondary)
 
                 Spacer()
 
                 Button(action: onImport) {
-                    Text("开始传送")
+                    Text("Import")
                         .fontWeight(.medium)
                         .padding(.horizontal, 20)
                         .padding(.vertical, 6)

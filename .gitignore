@@ -29,10 +29,10 @@ Package.pins
 Package.resolved
 .swiftpm/
 
-# CocoaPods (未使用但预留)
+# CocoaPods
 Pods/
 
-# Carthage (未使用但预留)
+# Carthage
 Carthage/Build/
 
 # fastlane
@@ -51,6 +51,8 @@ fastlane/test_output
 .claude/
 .cursor/
 .aider*
+AGENTS.md
+CLAUDE.md
 
 # Design references (not source code)
 *.pdf

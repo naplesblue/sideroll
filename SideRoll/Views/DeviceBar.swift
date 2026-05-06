@@ -37,11 +37,11 @@ struct DeviceBar: View {
                 }
 
                 if deviceFileCount > 0 {
-                    Text("· \(deviceFileCount) 张")
+                    Text("· \(deviceFileCount) photos")
                         .foregroundStyle(.secondary)
                 }
             } else {
-                Text("未连接 iPhone")
+                Text("No iPhone connected")
                     .foregroundStyle(.secondary)
             }
 
@@ -75,9 +75,9 @@ struct DeviceBar: View {
     }
 
     private var statusText: String {
-        if deviceFileCount > 0 { return "就绪" }
-        if isLocked { return "请解锁 iPhone 屏幕" }
-        return "连接中…"
+        if deviceFileCount > 0 { return "Ready" }
+        if isLocked { return "Please unlock your iPhone" }
+        return "Connecting…"
     }
 
     private func batteryIcon(level: Int) -> String {

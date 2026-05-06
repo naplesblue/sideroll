@@ -27,10 +27,10 @@ struct CandidateGridView: View {
                     Image(systemName: "photo.on.rectangle.angled")
                         .font(.system(size: 40))
                         .foregroundStyle(.tertiary)
-                    Text("暂无候选照片")
+                    Text("No candidates")
                         .font(.system(size: 13))
                         .foregroundStyle(.secondary)
-                    Text("选择相机文件夹并连接 iPhone")
+                    Text("Select a camera folder and connect your iPhone")
                         .font(.system(size: 13))
                         .foregroundStyle(.tertiary)
                 }
