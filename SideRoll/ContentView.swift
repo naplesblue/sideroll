@@ -22,13 +22,8 @@ struct ContentView: View {
     @State private var exifFetched: Set<String> = []
     @State private var existingFiles: Set<String> = []
 
-    // Import state
-    @State private var isImporting = false
-    @State private var importProgress: Double = 0
-    @State private var importProgressText = ""
-    @State private var importCancelled = false
-    @State private var showImportResult = false
-    @State private var importResultMessage = ""
+    // Import
+    @StateObject private var importer = ImportCoordinator()
 
     // Preferences (persisted via UserDefaults)
     @AppStorage("onlyNewFiles") private var onlyNewFiles = true
@@ -144,11 +139,11 @@ struct ContentView: View {
             BottomBar(
                 selectedCount: selectedNames.count,
                 totalSizeMB: totalSizeMB,
-                isImporting: isImporting,
-                progress: importProgress,
-                progressText: importProgressText,
+                isImporting: importer.isImporting,
+                progress: importer.progress,
+                progressText: importer.progressText,
                 onImport: { startImport() },
-                onCancel: { importCancelled = true }
+                onCancel: { importer.cancelled = true }
             )
         }
         .background(Color(nsColor: .windowBackgroundColor))
@@ -178,14 +173,20 @@ struct ContentView: View {
         .onChange(of: buffer) { _, _ in autoSelectAll() }
         .onChange(of: onlyNewFiles) { _, _ in autoSelectAll() }
         .onChange(of: subfolderName) { _, _ in scanExistingFiles() }
-        .alert(L.importComplete(lang), isPresented: $showImportResult) {
+        .alert(L.importComplete(lang), isPresented: $importer.showResult) {
             Button(autoQuit ? L.doneQuit(lang) : L.done(lang)) {
                 if autoQuit {
                     NSApplication.shared.terminate(nil)
                 }
             }
         } message: {
-            Text(importResultMessage)
+            Text(importer.resultMessage)
+        }
+        .onChange(of: importer.showResult) { _, done in
+            if done {
+                scanExistingFiles()
+                autoSelectAll()
+            }
         }
     }
 
@@ -293,66 +294,14 @@ struct ContentView: View {
         let destFolder = folder.appendingPathComponent(destName, isDirectory: true)
         guard !selectedFiles.isEmpty else { return }
 
-        let resolvedDates = exifDates
-        struct Pending { let file: ICCameraFile; let preferredDate: Date? }
-        let pending: [Pending] = selectedFiles.flatMap { parent -> [Pending] in
-            let date = parent.name.flatMap { resolvedDates[$0] }
-            return LivePhotoPairing.filesToImport(for: parent).map {
-                Pending(file: $0, preferredDate: date)
-            }
-        }
-        guard !pending.isEmpty else { return }
-
-        let skipExisting = onlyNewFiles
-        let preserveEXIF = keepOriginalEXIF
-
-        let engine = ImportEngine(device: enumerator.device)
-        isImporting = true
-        importCancelled = false
-        importProgress = 0
-        importProgressText = L.starting(lang)
-
-        Task {
-            var downloaded = 0, skipped = 0, failed = 0
-            let total = pending.count
-
-            for (i, item) in pending.enumerated() {
-                if importCancelled {
-                    let remaining = total - i
-                    importProgressText = L.cancelled(lang, downloaded, remaining)
-                    break
-                }
-
-                importProgressText = "[\(i + 1)/\(total)] \(item.file.name ?? "?")"
-
-                do {
-                    let result = try await engine.download(file: item.file, to: destFolder, skipExisting: skipExisting)
-                    switch result {
-                    case .downloaded(let url):
-                        downloaded += 1
-                        if preserveEXIF, let date = item.preferredDate {
-                            engine.setFileDate(url, to: date)
-                        }
-                    case .skipped:
-                        skipped += 1
-                    }
-                } catch {
-                    failed += 1
-                }
-
-                importProgress = Double(i + 1) / Double(total)
-            }
-
-            if !importCancelled {
-                importResultMessage = L.importResult(lang, downloaded, skipped, failed)
-                importProgressText = L.importSummary(lang, downloaded, skipped, failed)
-            } else {
-                importResultMessage = L.cancelledResult(lang, downloaded, total - downloaded - skipped - failed)
-            }
-            isImporting = false
-            scanExistingFiles()
-            autoSelectAll()
-            showImportResult = true
-        }
+        importer.start(
+            files: selectedFiles,
+            exifDates: exifDates,
+            destination: destFolder,
+            device: enumerator.device,
+            skipExisting: onlyNewFiles,
+            preserveEXIF: keepOriginalEXIF,
+            lang: lang
+        )
     }
 }
