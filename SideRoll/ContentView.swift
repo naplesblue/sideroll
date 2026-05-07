@@ -16,6 +16,15 @@ struct ContentView: View {
     @State private var buffer: TimeInterval = TimeWindowResolver.defaultBuffer
     @State private var subfolderName: String = "iPhone"
 
+    // Manual time window (F1)
+    @AppStorage("useManualWindow") private var useManualWindow = false
+    @State private var manualPreset: ManualWindowPreset = .today
+    @State private var customStart: Date = Calendar.current.startOfDay(for: Date())
+    @State private var customEnd: Date = Calendar.current.date(
+        byAdding: DateComponents(day: 1, second: -1),
+        to: Calendar.current.startOfDay(for: Date())
+    ) ?? Date()
+
     // Candidates & selection
     @State private var selectedNames: Set<String> = []
     @State private var exifDates: [String: Date] = [:]
@@ -51,7 +60,10 @@ struct ContentView: View {
     }
 
     private var timeWindow: TimeWindow? {
-        TimeWindowResolver.resolve(photos: cameraPhotos, buffer: buffer)
+        if useManualWindow {
+            return manualPreset.window(customStart: customStart, customEnd: customEnd)
+        }
+        return TimeWindowResolver.resolve(photos: cameraPhotos, buffer: buffer)
     }
 
     private var candidates: [ICCameraFile] {
@@ -88,6 +100,10 @@ struct ContentView: View {
                     buffer: $buffer,
                     subfolderName: $subfolderName,
                     timeWindow: timeWindow,
+                    useManualWindow: $useManualWindow,
+                    manualPreset: $manualPreset,
+                    customStart: $customStart,
+                    customEnd: $customEnd,
                     onlyNewFiles: $onlyNewFiles,
                     autoQuit: $autoQuit,
                     keepOriginalEXIF: $keepOriginalEXIF
@@ -173,6 +189,10 @@ struct ContentView: View {
         .onChange(of: buffer) { _, _ in autoSelectAll() }
         .onChange(of: onlyNewFiles) { _, _ in autoSelectAll() }
         .onChange(of: subfolderName) { _, _ in scanExistingFiles() }
+        .onChange(of: useManualWindow) { _, _ in autoSelectAll() }
+        .onChange(of: manualPreset) { _, _ in autoSelectAll() }
+        .onChange(of: customStart) { _, _ in autoSelectAll() }
+        .onChange(of: customEnd) { _, _ in autoSelectAll() }
         .alert(L.importComplete(lang), isPresented: $importer.showResult) {
             Button(autoQuit ? L.doneQuit(lang) : L.done(lang)) {
                 if autoQuit {

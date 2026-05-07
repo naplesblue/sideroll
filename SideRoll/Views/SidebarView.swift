@@ -6,12 +6,53 @@
 import SwiftUI
 import UniformTypeIdentifiers
 
+enum ManualWindowPreset: String, CaseIterable, Identifiable {
+    case today, yesterday, last7Days, custom
+    var id: String { rawValue }
+
+    func label(_ l: AppLanguage) -> String {
+        switch self {
+        case .today:      return L.presetToday(l)
+        case .yesterday:  return L.presetYesterday(l)
+        case .last7Days:  return L.presetLast7Days(l)
+        case .custom:     return L.presetCustom(l)
+        }
+    }
+
+    /// Resolves the preset to a concrete TimeWindow. For `.custom`, uses the
+    /// passed-in dates; returns nil if start ≥ end.
+    func window(customStart: Date, customEnd: Date) -> TimeWindow? {
+        let cal = Calendar.current
+        let today = cal.startOfDay(for: Date())
+        let endOfToday = cal.date(byAdding: DateComponents(day: 1, second: -1), to: today)!
+        switch self {
+        case .today:
+            return TimeWindow(start: today, end: endOfToday)
+        case .yesterday:
+            let yesterday = cal.date(byAdding: .day, value: -1, to: today)!
+            let endOfYesterday = cal.date(byAdding: DateComponents(day: 1, second: -1), to: yesterday)!
+            return TimeWindow(start: yesterday, end: endOfYesterday)
+        case .last7Days:
+            let start = cal.date(byAdding: .day, value: -6, to: today)!
+            return TimeWindow(start: start, end: endOfToday)
+        case .custom:
+            guard customStart < customEnd else { return nil }
+            return TimeWindow(start: customStart, end: customEnd)
+        }
+    }
+}
+
 struct SidebarView: View {
     @Binding var targetFolder: URL?
     @Binding var cameraPhotos: [CameraPhoto]
     @Binding var buffer: TimeInterval
     @Binding var subfolderName: String
     var timeWindow: TimeWindow?
+
+    @Binding var useManualWindow: Bool
+    @Binding var manualPreset: ManualWindowPreset
+    @Binding var customStart: Date
+    @Binding var customEnd: Date
 
     @Binding var onlyNewFiles: Bool
     @Binding var autoQuit: Bool
@@ -22,25 +63,32 @@ struct SidebarView: View {
     private var lang: AppLanguage { AppLanguage(rawValue: languageRaw) ?? .en }
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
-                // — Camera folder
-                sectionHeader(L.cameraFolder(lang))
-                folderCard
+        GeometryReader { geo in
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
+                    // Top group: folder + time window (primary actions)
+                    VStack(alignment: .leading, spacing: 24) {
+                        VStack(alignment: .leading, spacing: 10) {
+                            sectionHeader(L.cameraFolder(lang))
+                            folderCard
+                            if targetFolder != nil {
+                                targetSection
+                            }
+                        }
+                        timeWindowSection
+                    }
 
-                // — Time window buffer
-                sectionHeader(L.timeBuffer(lang))
-                bufferSection
+                    Spacer(minLength: 24)
 
-                // — Target
-                sectionHeader(L.destination(lang))
-                targetSection
-
-                // — Options
-                sectionHeader(L.options(lang))
-                preferencesSection
+                    // Bottom group: options (rarely-changed settings)
+                    VStack(alignment: .leading, spacing: 10) {
+                        sectionHeader(L.options(lang))
+                        preferencesSection
+                    }
+                }
+                .padding(16)
+                .frame(minHeight: geo.size.height, alignment: .top)
             }
-            .padding(16)
         }
     }
 
@@ -107,22 +155,80 @@ struct SidebarView: View {
         }
     }
 
-    // MARK: - Buffer
+    // MARK: - Time window section (header + content)
 
-    private var bufferSection: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text(L.hours(lang, String(format: "%.1f", buffer / 3600)))
-                .font(.system(size: 22, weight: .bold, design: .rounded))
-                .foregroundStyle(Color.amber)
+    private var timeWindowSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            // Header row: title on left, mode picker on right
+            HStack(spacing: 8) {
+                Text(L.timeWindow(lang))
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Picker("", selection: $useManualWindow) {
+                    Text(L.modeAuto(lang)).tag(false)
+                    Text(L.modeManual(lang)).tag(true)
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .controlSize(.mini)
+                .frame(width: 110)
+            }
 
-            Slider(value: $buffer, in: 0...43200, step: 1800)
-                .tint(.amber)
-                .controlSize(.small)
+            if useManualWindow {
+                manualWindowControls
+            } else {
+                autoWindowControls
+            }
 
+            // Active range readout (both modes)
             if let w = timeWindow {
                 Text("\(Self.timeFmt.string(from: w.start)) → \(Self.timeFmt.string(from: w.end))")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private var autoWindowControls: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Slider(value: $buffer, in: 0...43200, step: 1800)
+                .tint(.amber)
+                .controlSize(.small)
+            Text(L.hours(lang, String(format: "%.1f", buffer / 3600)))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private var manualWindowControls: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Picker("", selection: $manualPreset) {
+                ForEach(ManualWindowPreset.allCases) { preset in
+                    Text(preset.label(lang)).tag(preset)
+                }
+            }
+            .pickerStyle(.segmented)
+            .controlSize(.small)
+            .labelsHidden()
+
+            if manualPreset == .custom {
+                VStack(alignment: .leading, spacing: 4) {
+                    DatePicker(L.startDate(lang), selection: $customStart)
+                        .controlSize(.small)
+                        .datePickerStyle(.compact)
+                        .font(.caption)
+                    DatePicker(L.endDate(lang), selection: $customEnd)
+                        .controlSize(.small)
+                        .datePickerStyle(.compact)
+                        .font(.caption)
+                    if customStart >= customEnd {
+                        Text(L.invalidDateRange(lang))
+                            .font(.caption)
+                            .foregroundStyle(.red)
+                    }
+                }
+                .padding(.top, 2)
             }
         }
     }

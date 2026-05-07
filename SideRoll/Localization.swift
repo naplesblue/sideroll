@@ -91,6 +91,36 @@ enum L {
     static func choose(_ l: AppLanguage) -> String {
         l == .zh ? "选择" : "Choose"
     }
+    static func timeWindow(_ l: AppLanguage) -> String {
+        l == .zh ? "时间窗口" : "Time Window"
+    }
+    static func modeAuto(_ l: AppLanguage) -> String {
+        l == .zh ? "自动" : "Auto"
+    }
+    static func modeManual(_ l: AppLanguage) -> String {
+        l == .zh ? "手动" : "Manual"
+    }
+    static func presetToday(_ l: AppLanguage) -> String {
+        l == .zh ? "今日" : "Today"
+    }
+    static func presetYesterday(_ l: AppLanguage) -> String {
+        l == .zh ? "昨日" : "Yesterday"
+    }
+    static func presetLast7Days(_ l: AppLanguage) -> String {
+        l == .zh ? "最近 7 天" : "Last 7 days"
+    }
+    static func presetCustom(_ l: AppLanguage) -> String {
+        l == .zh ? "自定义" : "Custom"
+    }
+    static func startDate(_ l: AppLanguage) -> String {
+        l == .zh ? "开始" : "Start"
+    }
+    static func endDate(_ l: AppLanguage) -> String {
+        l == .zh ? "结束" : "End"
+    }
+    static func invalidDateRange(_ l: AppLanguage) -> String {
+        l == .zh ? "开始时间需早于结束时间" : "Start must be before end"
+    }
 
     // MARK: - BottomBar
     static func cancel(_ l: AppLanguage) -> String {
